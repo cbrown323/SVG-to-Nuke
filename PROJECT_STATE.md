@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-07-12  
 **Repo:** https://github.com/cbrown323/SVG-to-Nuke  
-**Status:** F-1 sync fix merged from `main` (SMIL + CSS/Lottie freeze, two-pass capture). F-5 UV coverage fix verified. Object ID pass + async progress panel on feature branch. Normal pass (E-1) abandoned.
+**Status:** F-1 sync fix merged from `main` (SMIL + CSS/Lottie freeze, two-pass capture). F-5 UV coverage fix verified. Object ID pass + async progress panel on feature branch.
 
 ---
 
@@ -18,7 +18,7 @@ Supports three input formats:
 | `.json` | Lottie / Bodymovin | Temp HTML host + lottie-web CDN; frame-accurate `goToAndStop` |
 | `.html` | Custom host page | Same as SVG unless page exposes `window.lottieAnim` |
 
-### Design decision (Claude session origin)
+### Design decision
 
 User requirement: **JS-driven / Lottie-style** animated graphics in Nuke.
 
@@ -41,9 +41,9 @@ Fidelity is bounded by headless Chromium. True vector resolution-independence is
 │       │                                                         │
 │       ▼                                                         │
 │  nuke_svg_import.py                                             │
-│    • File picker + parameter panel (W/H, duration, fps, UV)     │
-│    • subprocess → external Python                               │
-│    • Creates Read node(s) for color (+ UV if requested)         │
+│    • File picker + parameter panel (W/H, frames, fps, UV, Object ID) │
+│    • Background QProcess → external Python                           │
+│    • Creates Read node(s) for color (+ UV / ID if requested)         │
 └──────────────────────────┬──────────────────────────────────────┘
                            │
                            ▼
@@ -53,7 +53,7 @@ Fidelity is bounded by headless Chromium. True vector resolution-independence is
 │  svg_to_frames.py                                               │
 │    • Launch headless Chromium                                   │
 │    • Detect Lottie vs time-based animation                      │
-│    • Screenshot each frame (optional UV pass per frame)         │
+│    • Screenshot each frame (optional UV / Object ID passes)     │
 │    • Write PNG sequence next to source file                     │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -75,7 +75,7 @@ path/to/animation_frames/
   animation.0002.png
   ...
   animation.uv.0001.png   # only when --uv-pass
-  animation.uv.0002.png
+  animation.id.0001.png    # only when --id-pass
   _debug_first_load.png   # always written on rasterize
 ```
 
@@ -166,7 +166,7 @@ Test asset: **emoji sticker** Lottie with floating hearts — main body Lottie-d
 | **F-2 Scale/alpha mismatch** | Tail (and other elements) different size in color alpha vs UV alpha |
 | **F-3 Comp misalignment** | STMap comp shows UV and color out of sync on timing and scale |
 
-### Root cause (diagnosed in Claude session)
+### Root cause
 
 For **Lottie** files, the rasterizer:
 
@@ -193,18 +193,13 @@ Additionally, the UV repaint now preserves pixel coverage for **any** input (fix
 
 | ID | Area | Description | Status |
 |----|------|-------------|--------|
-| **E-1** | AOV | Normal pass | **Cancelled** — not feasible for flat SVG art |
 | **E-7** | AOV | Object ID pass (unique RGB per fill/stroke) | **Done** |
 | **E-8** | UX | Async rasterize + progress panel (Nuke stays interactive) | **Done** |
-| E-2 | UX | Hide/disable duration/FPS panel fields when Lottie detected | Open |
+| E-2 | UX | Hide/disable frame/FPS panel fields when Lottie detected | Open |
 | E-3 | UX | Expose `--selector` in Nuke panel for cropped captures | Open |
-| E-4 | Repo | `requirements.txt`, README, sample test assets | Open |
+| E-4 | Repo | `requirements.txt`, sample test assets | Open |
 | E-5 | Lottie | Offline / vendored lottie-web (no unpkg CDN) | Open |
 | E-6 | Platform | Cross-platform `SVG_RASTER_PYTHON` defaults / docs | Open |
-
-### Normal pass (E-1)
-
-Evaluated and abandoned — flat SVG/Lottie art has no meaningful surface normals for relighting.
 
 ---
 
@@ -215,7 +210,7 @@ Evaluated and abandoned — flat SVG/Lottie art has no meaningful surface normal
 | **P0** | F-1/F-2/F-3 | Sync | Animation sync fix — pause all layers, re-sync before each screenshot | **Done (2026-07-12)** |
 | P1 | F-4 | UV | Validate sync fix resolves tail/heart misalignment on emoji sticker asset | Open — needs user re-test in Nuke |
 | P1 | F-5 | UV | Stroke coverage + expanded selector (`line`, `text`, `tspan`, `use`) in UV pass | **Done (2026-07-12)** — verified pixel-exact alpha on test asset |
-| P2 | E-4 | Repo | `requirements.txt`, install docs, sample assets | Open |
+| P2 | E-4 | Repo | `requirements.txt`, sample assets | Open |
 | P3 | E-2 | UX | Panel improvements for Lottie vs non-Lottie | Open |
 
 ---
@@ -235,7 +230,7 @@ Evaluated and abandoned — flat SVG/Lottie art has no meaningful surface normal
 ### Animation coverage
 
 - Non-Lottie scrubbing uses Web Animations API only — `requestAnimationFrame`-only animations may not scrub.
-- Duration/FPS ignored for Lottie (panel still shows them).
+- Frame count / FPS ignored for Lottie when **Auto** is enabled (panel still shows fields).
 
 ### UV pass
 
@@ -256,16 +251,14 @@ Evaluated and abandoned — flat SVG/Lottie art has no meaningful surface normal
 
 1. ~~Apply **F-1 sync fix** to `svg_to_frames.py`~~ — **done 2026-07-12**, merged from `main` + F-5 UV coverage fix.
 2. Re-render emoji sticker asset with UV pass; confirm timing/scale match in Nuke STMap comp (F-4).
-3. Add `requirements.txt` + README.
+3. ~~Add README~~ — done; add `requirements.txt` if needed.
 
 **Artifacts:**
 
 - `PROJECT_STATE.md` (this file)
-- `DEV_LOG.md` (full session history including Claude origin)
-- `nuke_svg_import.py`, `svg_to_frames.py` (sync fix + UV coverage fix applied)
+- `DEV_LOG.md` (development history)
+- `nuke_svg_import.py`, `svg_to_frames.py` (sync fix + UV/ID AOV passes)
 - `test_assets/rocket_test.svg` + `test_assets/check_alpha.py` (alpha-parity regression test)
-
-**Claude chat reference:** https://claude.ai/share/58a60fd6-343a-458d-bb26-46514c5c6ca9
 
 ---
 
@@ -277,5 +270,5 @@ SVG-to-Nuke/
 ├── svg_to_frames.py      # Playwright rasterizer CLI (F-1 sync + UV/ID AOV passes)
 ├── PROJECT_STATE.md      # This file
 ├── DEV_LOG.md            # Development log
-└── README.md             # Repo title (minimal)
+└── README.md             # Install and usage guide
 ```

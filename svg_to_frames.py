@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 svg_to_frames.py — Rasterize an animated SVG / Lottie JSON to a PNG frame
-sequence, ready to be loaded into Nuke with a normal Read node.
+sequence, ready to be loaded into Nuke with a standard Read node.
 
 Handles three input types automatically, based on file extension:
 
