@@ -175,8 +175,48 @@ DETECT_LOOP_DURATION_JS = """
 """
 
 
+def sanitize_lottie_parent_outpoints(animation_data: dict) -> dict:
+    """Clamp layers that outlive their parent.
+
+    lottie-web keeps parented children painting after the parent layer's out-point,
+    often as degenerate sub-pixel geometry (shoe-colored 'ghost' lines through the
+    character). LottieFiles site playback does not show that debris. Matching the
+    child's ``op`` to the parent's removes it without touching UV sync.
+    """
+    def clamp_layers(layers):
+        by_ind = {
+            layer["ind"]: layer
+            for layer in layers
+            if isinstance(layer, dict) and "ind" in layer
+        }
+        for layer in layers:
+            if not isinstance(layer, dict):
+                continue
+            parent_id = layer.get("parent")
+            if parent_id is None:
+                continue
+            parent = by_ind.get(parent_id)
+            if not parent:
+                continue
+            parent_op = parent.get("op")
+            layer_op = layer.get("op")
+            if parent_op is None or layer_op is None:
+                continue
+            if layer_op > parent_op:
+                layer["op"] = parent_op
+
+    if isinstance(animation_data.get("layers"), list):
+        clamp_layers(animation_data["layers"])
+    for asset in animation_data.get("assets") or []:
+        if isinstance(asset, dict) and isinstance(asset.get("layers"), list):
+            clamp_layers(asset["layers"])
+    return animation_data
+
+
 def make_lottie_host(json_path: Path, width: int, height: int) -> Path:
     animation_data = json.loads(json_path.read_text(encoding="utf-8"))
+    if isinstance(animation_data, dict):
+        sanitize_lottie_parent_outpoints(animation_data)
     html = LOTTIE_HOST_TEMPLATE.format(
         cdn=LOTTIE_CDN, width=width, height=height,
         animation_data=json.dumps(animation_data),

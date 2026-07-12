@@ -302,6 +302,35 @@ User asked for normal pass output. Claude acknowledged but focused on sync fix f
 
 ---
 
+## 2026-07-12 — Session 6: Downloaded JSON doubles; site does not (orphan Layer 1)
+
+### Context
+
+- User confirmed: downloaded Girl Cycling JSON **does** double after ~frame 92; LottieFiles website playback does **not**.
+- UV sync still good — do not regress.
+
+### Findings
+
+- Bug is in the file + lottie-web, not authored lady overlap: four `lady` segments are pixel-identical at equivalent local times; removing inactive ladies changes ~0–200 px.
+- Root cause: main-comp **`Layer 1`** (shoe-colored fill) is parented to **`nature1` (`op=90`)** but itself runs **`op=180`**. After frame 90 lottie-web keeps it `display:block` as ~0.7px-tall geometry; position keys from t=90 slide it through the pedal band (y≈548) → ghost “doubled” shoe line.
+- Website uses DotLottie/ThorVG (and/or preview encoding) that does not present that debris; our Chromium + lottie-web SVG path does.
+
+### Changes
+
+1. `sanitize_lottie_parent_outpoints()` — clamp any layer’s `op` to its parent’s `op` when the child outlives the parent (top-level + assets).
+2. Applied inside `make_lottie_host()` before embedding `animationData`.
+
+### Testing
+
+- Girl Cycling: Layer 1 `op` 180→90; frames 0–89 unchanged; f90+ hide Layer 1 (~1.4–1.7k px, concentrated on y=548 / pedal region).
+- UV two-pass smoke on sanitized host still differs strongly from color (UV machinery intact).
+
+### Notes
+
+- User must re-copy `svg_to_frames.py` / `nuke_svg_import.py` into `C:\Users\CBWorkflow\.nuke\` and re-render.
+
+---
+
 ## Template for future entries
 
 ```markdown

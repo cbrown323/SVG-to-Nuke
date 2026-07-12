@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-07-12  
 **Repo:** https://github.com/cbrown323/SVG-to-Nuke  
-**Status:** F-1 UV sync confirmed. Auto frame count now uses native Lottie `fr`/`op` (fixes 180→144 conform). Re-render cycling clip to clear leg freeze.
+**Status:** F-1 UV sync confirmed. Native Lottie frame count fixed. Orphan parented layers (Girl Cycling post-90 shoe ghost) clamped to parent out-point — re-copy scripts + re-render.
 
 ---
 
@@ -248,6 +248,10 @@ Not implemented. Possible approaches to evaluate:
 - Per-shape bounding-box UVs, not atlas UVs.
 - Strokes zeroed during UV capture.
 
+### Lottie parented layers
+
+- Children that outlive their parent’s out-point are clamped to the parent `op` before load (avoids lottie-web ghost geometry such as Girl Cycling’s post-90 `Layer 1` shoe line). Site DotLottie playback does not show that debris.
+
 ### Operational
 
 - `_debug_first_load.png` written every run.
@@ -260,9 +264,11 @@ Not implemented. Possible approaches to evaluate:
 **Start here:**
 
 1. ~~Apply **F-1 sync fix** to `svg_to_frames.py`~~ (done — SMIL+CSS+Lottie, two-pass)
-2. Copy updated `svg_to_frames.py` into Nuke `NUKE_PATH` and **re-render** Girl cycling / emoji sticker with UV pass; confirm alignment.
-3. Design and implement **E-1 normal pass** if sync fix validates.
-4. Add `requirements.txt` + README.
+2. ~~Native Lottie Auto frame count~~ (done — `fr`/`op` from JSON)
+3. ~~Orphan parented-layer clamp~~ (done — Girl Cycling post-90 ghost)
+4. Copy updated scripts into Nuke `NUKE_PATH` and **re-render** Girl cycling with UV; confirm no shoe ghost after frame 90 and UV still aligned.
+5. Design and implement **E-1 normal pass** if validates.
+6. Add `requirements.txt` + README.
 
 **Artifacts:**
 
