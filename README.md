@@ -62,28 +62,98 @@ Restart Nuke. You should see **File → Import Animated SVG...**.
 
 ### 3. Install Playwright in an external Python
 
-Use any Python 3 environment **outside** Nuke (system Python, venv, or conda):
+Use any Python 3 environment **outside** Nuke (system Python, venv, or conda). A dedicated venv next to your Nuke scripts is usually the least painful option on Windows.
 
-```bash
-pip install playwright
-playwright install chromium
-```
-
-On Windows (Command Prompt), to persist the interpreter path for Nuke:
+**Create and install (example — adjust the folder name):**
 
 ```bat
-setx SVG_RASTER_PYTHON "C:\path\to\python.exe"
+cd C:\Users\AlexStudio\.nuke
+python -m venv svg-raster-venv
+svg-raster-venv\Scripts\python.exe -m pip install playwright
+svg-raster-venv\Scripts\python.exe -m playwright install chromium
 ```
 
-On macOS / Linux, add to your shell profile or Nuke launch script:
+**Verify the interpreter before touching Nuke** (swap in your actual path):
+
+```bat
+"C:\Users\AlexStudio\.nuke\svg-raster-venv\Scripts\python.exe" -c "import playwright; print('playwright ok')"
+```
+
+If that prints `playwright ok`, you have the right `python.exe`. If you get `ModuleNotFoundError`, you installed Playwright into a *different* Python than the one you are testing.
+
+#### Point Nuke at that Python
+
+**Option A — environment variable (recommended)**
+
+Windows Command Prompt — persists across reboots:
+
+```bat
+setx SVG_RASTER_PYTHON "C:\Users\AlexStudio\.nuke\svg-raster-venv\Scripts\python.exe"
+```
+
+macOS / Linux — add to `~/.zshrc` or `~/.bashrc`:
 
 ```bash
-export SVG_RASTER_PYTHON=/path/to/python3
+export SVG_RASTER_PYTHON="/Users/alex/.nuke/svg-raster-venv/bin/python3"
 ```
 
-Restart Nuke after setting the variable.
+Close and reopen Nuke after setting the variable. Shortcuts launched from the desktop will not see a variable you only set in an already-open terminal unless you used `setx` (Windows) or logged out/in.
 
-Alternatively, edit `EXTERNAL_PYTHON` at the top of `nuke_svg_import.py` (less portable across machines).
+**Option B — edit `EXTERNAL_PYTHON` in `nuke_svg_import.py`**
+
+Use a **raw string** (`r"..."`) or forward slashes. Backslashes alone will break Python:
+
+```python
+# Good — raw string
+EXTERNAL_PYTHON = os.environ.get(
+    "SVG_RASTER_PYTHON",
+    r"C:\Users\AlexStudio\.nuke\svg-raster-venv\Scripts\python.exe",
+)
+
+# Also good — forward slashes
+EXTERNAL_PYTHON = os.environ.get(
+    "SVG_RASTER_PYTHON",
+    "C:/Users/AlexStudio/.nuke/svg-raster-venv/Scripts/python.exe",
+)
+```
+
+```python
+# Bad — SyntaxError: (unicode error) 'unicodeescape'
+EXTERNAL_PYTHON = "C:\Users\AlexStudio\.nuke\svg-raster-venv\Scripts\python.exe"
+```
+
+#### Example paths that work vs. paths that do not
+
+| Path | Works? | Notes |
+|------|--------|-------|
+| `C:\Users\AlexStudio\.nuke\svg-raster-venv\Scripts\python.exe` | Yes | Venv you created and installed Playwright into |
+| `C:\Users\AlexStudio\miniconda3\envs\nuke-tools\python.exe` | Yes | Conda env where you ran `pip install playwright` |
+| `C:\Users\AlexStudio\AppData\Local\Programs\Python\Python312\python.exe` | Yes | python.org install — use the full path, not the Start-menu shortcut |
+| `C:\Users\AlexStudio\AppData\Local\Microsoft\WindowsApps\python.exe` | Usually no | Windows Store stub — often redirects or lacks your packages |
+| `python` or `python3` (no full path) | Risky | Nuke may resolve a different interpreter than your terminal |
+
+#### If `svg_to_frames.py` is not beside `nuke_svg_import.py`
+
+By default the raster script is resolved automatically:
+
+```python
+os.path.join(os.path.dirname(__file__), "svg_to_frames.py")
+```
+
+If you keep the scripts in separate folders, set the script path explicitly — do **not** paste a Windows path with bare backslashes into `os.path.join()`:
+
+```bat
+setx SVG_RASTER_SCRIPT "C:\Users\AlexStudio\.nuke\svg_to_frames.py"
+```
+
+Both files should still live on `NUKE_PATH`; only override `SVG_RASTER_SCRIPT` when the auto-detect path is wrong.
+
+#### Quick checklist
+
+1. `pip install playwright` and `playwright install chromium` ran in the **same** `python.exe` you give to Nuke.
+2. `SVG_RASTER_PYTHON` points at that exact file (copy path from Explorer or `where python` on Windows).
+3. Restart Nuke after `setx` or shell-profile changes.
+4. `nuke_svg_import.py` and `svg_to_frames.py` sit in the same `.nuke` folder (step 1).
 
 ### Environment variables
 
@@ -187,9 +257,11 @@ SVG-to-Nuke/
 | Problem | Fix |
 |---------|-----|
 | Menu item missing | Check `menu.py` syntax and restart Nuke |
-| `Couldn't find the external Python interpreter` | Set `SVG_RASTER_PYTHON` to a Python with Playwright |
-| `ModuleNotFoundError: playwright` | Run `pip install playwright` in that Python |
+| `Couldn't find the external Python interpreter` | Set `SVG_RASTER_PYTHON` to the full path of a real `python.exe` (see step 3 examples) |
+| `ModuleNotFoundError: playwright` | Run `pip install playwright` in **that same** `python.exe`, then verify with `-c "import playwright"` |
 | Chromium errors | Run `playwright install chromium` in that Python |
+| `SyntaxError: unicodeescape` in `nuke_svg_import.py` | Use `r"..."` or forward slashes for Windows paths — see step 3 |
+| Windows Store `python.exe` does nothing | Use a venv or python.org install path instead of `WindowsApps\python.exe` |
 | UV / color out of sync | Re-render with the current `svg_to_frames.py` (old PNGs won’t match) |
 
 For internal backlog and design notes, see `PROJECT_STATE.md`.
