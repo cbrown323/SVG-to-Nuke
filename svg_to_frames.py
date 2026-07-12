@@ -166,6 +166,42 @@ CLEAR_UV_JS = """
 }
 """
 
+# Flat Z+ tangent-space normal per shape: (0, 0, 1) -> rgb(128, 128, 255).
+# Coverage rules mirror the UV pass so alpha matches the color pass.
+APPLY_NORMAL_JS = """
+() => {
+    const root = document.querySelector('#anim svg') || document.querySelector('svg');
+    if (!root) return;
+    const paint = 'rgb(128, 128, 255)';
+    const shapes = root.querySelectorAll(
+        'path, rect, circle, ellipse, polygon, polyline, line, text, tspan, use');
+    shapes.forEach(el => {
+        if (el.closest('clipPath, mask, pattern, marker, filter')) return;
+        const cs = window.getComputedStyle(el);
+        const hasFill = cs.fill !== 'none';
+        const hasStroke = cs.stroke !== 'none' && parseFloat(cs.strokeWidth) > 0;
+        if (!hasFill && !hasStroke) return;
+        el.setAttribute('data-nuke-normal-applied', '1');
+        el.setAttribute('data-nuke-orig-fill', el.style.fill || '');
+        el.setAttribute('data-nuke-orig-stroke', el.style.stroke || '');
+        el.style.fill = hasFill ? paint : 'none';
+        el.style.stroke = hasStroke ? paint : 'none';
+    });
+}
+"""
+
+CLEAR_NORMAL_JS = """
+() => {
+    document.querySelectorAll('[data-nuke-normal-applied]').forEach(el => {
+        el.style.fill = el.getAttribute('data-nuke-orig-fill') || '';
+        el.style.stroke = el.getAttribute('data-nuke-orig-stroke') || '';
+        el.removeAttribute('data-nuke-orig-fill');
+        el.removeAttribute('data-nuke-orig-stroke');
+        el.removeAttribute('data-nuke-normal-applied');
+    });
+}
+"""
+
 # Probe one animation loop cycle for SVG/SMIL/CSS assets (ignores repeat/infinite).
 DETECT_LOOP_DURATION_JS = """
 () => {
@@ -315,13 +351,23 @@ def _sync_js(is_lottie: bool, frame_index: int, frame_rate: float) -> str:
 """
 
 
+def _emit_meta(key: str, value: str):
+    print(f"NUKE_META\t{key}\t{value}", flush=True)
+
+
+def _emit_progress(pass_name: str, frame: int, total: int):
+    print(f"NUKE_PROGRESS\t{pass_name}\t{frame}\t{total}", flush=True)
+
+
 def rasterize(input_path: Path, out_pattern: str, fps: float, frame_count: int,
               auto_frames: bool, width: int, height: int, selector: str,
-              uv_pattern: str = None):
+              uv_pattern: str = None, normal_pattern: str = None):
     out_dir = Path(out_pattern).parent
     out_dir.mkdir(parents=True, exist_ok=True)
     if uv_pattern:
         Path(uv_pattern).parent.mkdir(parents=True, exist_ok=True)
+    if normal_pattern:
+        Path(normal_pattern).parent.mkdir(parents=True, exist_ok=True)
 
     cleanup = None
     file_meta = None
@@ -437,22 +483,47 @@ def rasterize(input_path: Path, out_pattern: str, fps: float, frame_count: int,
             else:
                 page.screenshot(path=path, omit_background=True)
 
-        # Two-pass capture: finish every color frame first, then every UV frame.
-        # Interleaving color→UV→color let wall-clock SMIL/CSS clocks (and slow
-        # UV DOM mutation) sample different poses under the same frame index.
+        passes = ["color"]
+        if uv_pattern:
+            passes.append("uv")
+        if normal_pattern:
+            passes.append("normal")
+        _emit_meta("total_frames", str(total_frames))
+        _emit_meta("passes", ",".join(passes))
+
+        # Finish every color frame first, then each AOV pass in order.
+        # Interleaving passes let wall-clock SMIL/CSS clocks (and slow DOM
+        # mutation) sample different poses under the same frame index.
         for i in range(total_frames):
             sync_to_frame(i)
-            grab(out_pattern.replace("####", f"{i + 1:04d}"))
+            path = out_pattern.replace("####", f"{i + 1:04d}")
+            grab(path)
+            _emit_progress("color", i + 1, total_frames)
+            _emit_meta("last_file", path)
 
         if uv_pattern:
             for i in range(total_frames):
                 sync_to_frame(i)
                 page.evaluate(APPLY_UV_JS)
                 # Re-assert pose after DOM mutation; style.fill overrides Lottie
-                # presentation attributes, so UV fills survive goToAndStop.
+                # presentation attributes, so AOV fills survive goToAndStop.
                 sync_to_frame(i)
-                grab(uv_pattern.replace("####", f"{i + 1:04d}"))
+                path = uv_pattern.replace("####", f"{i + 1:04d}")
+                grab(path)
                 page.evaluate(CLEAR_UV_JS)
+                _emit_progress("uv", i + 1, total_frames)
+                _emit_meta("last_file", path)
+
+        if normal_pattern:
+            for i in range(total_frames):
+                sync_to_frame(i)
+                page.evaluate(APPLY_NORMAL_JS)
+                sync_to_frame(i)
+                path = normal_pattern.replace("####", f"{i + 1:04d}")
+                grab(path)
+                page.evaluate(CLEAR_NORMAL_JS)
+                _emit_progress("normal", i + 1, total_frames)
+                _emit_meta("last_file", path)
 
         browser.close()
 
@@ -463,6 +534,8 @@ def rasterize(input_path: Path, out_pattern: str, fps: float, frame_count: int,
     print(f"Done — wrote {total_frames} frames to {out_dir}")
     if uv_pattern:
         print(f"Done — wrote {total_frames} UV-pass frames to {Path(uv_pattern).parent}")
+    if normal_pattern:
+        print(f"Done — wrote {total_frames} normal-pass frames to {Path(normal_pattern).parent}")
     return total_frames, final_fps
 
 
@@ -486,7 +559,12 @@ def main():
                      help="Also render a UV/ST pass (R=local U, G=local V per shape)")
     ap.add_argument("--uv-out", default=None,
                      help="Output pattern for the UV pass (default: derived from --out "
-                          "by inserting '_uv' before the frame number)")
+                          "by inserting 'uv.' before the frame number)")
+    ap.add_argument("--normal-pass", action="store_true",
+                     help="Also render a normal pass (flat Z+ per shape, for relighting)")
+    ap.add_argument("--normal-out", default=None,
+                     help="Output pattern for the normal pass (default: derived from --out "
+                          "by inserting 'normal.' before the frame number)")
     args = ap.parse_args()
 
     if not args.input.exists():
@@ -496,8 +574,12 @@ def main():
     if args.uv_pass:
         uv_pattern = args.uv_out or args.out.replace("####", "uv.####")
 
+    normal_pattern = None
+    if args.normal_pass:
+        normal_pattern = args.normal_out or args.out.replace("####", "normal.####")
+
     rasterize(args.input, args.out, args.fps, args.frames, args.auto_frames,
-              args.width, args.height, args.selector, uv_pattern)
+              args.width, args.height, args.selector, uv_pattern, normal_pattern)
 
 
 if __name__ == "__main__":
