@@ -8,13 +8,12 @@
 
 ## Mission
 
-Ship three production-facing capabilities and a regression safety net around the F-1 sync / UV alpha work already merged:
+Ship two production-facing capabilities and a regression safety net around the F-1 sync / UV alpha work already merged:
 
 | Priority | ID | Capability | Why now |
 |----------|-----|------------|---------|
 | **P0** | T-1 | Automated smoke test | Locks F-1 two-pass sync + UV alpha parity; prevents silent regressions |
-| **P1** | T-2 | Auto STMap graph | Biggest new creative payoff — import → retexture-ready comp in one click |
-| **P2** | T-3 | Batch import + output path override | Production scale for sticker packs / UI sets; CLI parity in Nuke |
+| **P1** | T-3 | Batch import + output path override | Production scale for sticker packs / UI sets; CLI parity in Nuke |
 
 Secondary track (same sprint, lower priority):
 
@@ -53,7 +52,6 @@ Secondary track (same sprint, lower priority):
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  nuke_svg_import.py                                                     │
-│    T-2  _build_stmap_graph(color_read, uv_read)                         │
 │    T-3  import_folder() + output_dir picker                             │
 │    T-3  --out passed to subprocess (replace hardcoded out_dir)          │
 │    T-5  reimport_selected_read() — menu on Read nodes                   │
@@ -120,74 +118,7 @@ None — **start here**.
 
 ---
 
-## Phase 1 — Auto STMap graph (T-2)
-
-**Goal:** When UV pass is enabled, user gets a retexture-ready mini-graph, not two orphan Reads.
-
-### Proposed graph (Nuke 14.x)
-
-```
-[Color Read] ──► [STMap] ──► [Merge over checker?]   (optional preview)
-                    ▲
-[UV Read]    ───────┘
-[Constant]   ──► [STMap.texture]   (placeholder 1×1 or 512² neutral gray)
-```
-
-**Simpler v1 (recommended):**
-
-```
-[Color Read] ──► STMap.input
-[UV Read]    ──► STMap.uv
-```
-
-Leave `STMap.texture` disconnected (artist plugs texture) **or** wire a `Constant` node (0.5 gray) as a visible placeholder.
-
-### Behavior
-
-| Trigger | Graph |
-|---------|-------|
-| Import with UV pass **off** | Color Read only (unchanged) |
-| Import with UV pass **on** | Color Read + UV Read + STMap, wired and positioned |
-| UV pass **on**, ID pass **on** | STMap graph + ID Read offset to the right (ID not wired into STMap) |
-
-### Node layout
-
-- Color Read at origin.
-- UV Read +110px X (current convention).
-- STMap below color Read (+80px Y), inputs connected.
-- STMap `label` set to source basename.
-
-### Acceptance criteria
-
-- [ ] STMap node created only when UV pass requested and UV frames exist.
-- [ ] `STMap.uv` connected to UV Read; `STMap` primary input connected to Color Read.
-- [ ] Frame ranges on all Reads match.
-- [ ] Re-import (T-5) updates Reads **and** preserves STMap wiring.
-
-### Files touched
-
-| File | Change |
-|------|--------|
-| `nuke_svg_import.py` | `_build_stmap_graph()`, call from `_RasterizeProgressDialog._on_finished` |
-
-### Dependencies
-
-- T-1 recommended first (STMap doesn't affect rasterizer, but smoke test protects UV pass).
-- T-5 should update STMap wiring when re-rendering — design metadata now (see T-5).
-
-### Open design choice (decide at implementation)
-
-| Option | Pros | Cons |
-|--------|------|------|
-| A. STMap only, texture unplugged | Minimal, artist control | Empty preview until texture added |
-| B. STMap + Constant placeholder on texture | Immediate visual feedback | May confuse if constant color shows through |
-| C. STMap + Merge over black | Nice preview | More nodes, opinionated comp |
-
-**Recommendation:** Option A for v1; document in README that artist connects `STMap.texture`.
-
----
-
-## Phase 2 — Production scale (T-3)
+## Phase 1 — Production scale (T-3)
 
 **Goal:** Import many files with shared settings; write frames anywhere (CLI parity).
 
@@ -219,8 +150,8 @@ Pass `--out` to subprocess (already supported by `svg_to_frames.py`).
 | 3 | Optional output root (same override as 2a) |
 | 4 | Queue: one `QProcess` at a time (or parallel with cap=2 — **v1: serial only**) |
 | 5 | Progress panel shows current file + overall `3/12` |
-| 6 | On each completion: create Read (+ STMap if UV) for that asset |
-| 7 | Layout: stack each asset's graph vertically (+150px Y per asset) |
+| 6 | On each completion: create Read nodes for each pass |
+| 7 | Layout: stack each asset's Reads vertically (+150px Y per asset) |
 
 **File discovery:**
 
@@ -234,7 +165,7 @@ Skip hidden files, `_*`, and optionally skip if `{basename}_frames/` already exi
 
 - [ ] Single import with custom output dir writes to chosen path; Read pattern matches.
 - [ ] Batch of 3+ test assets completes without Nuke freeze (async preserved).
-- [ ] Each asset gets correctly named sequence; STMap graph per UV asset.
+- [ ] Each asset gets correctly named sequence and Read nodes per pass.
 - [ ] Failure on asset N does not block asset N+1 (log error, continue).
 
 ### Files touched
@@ -246,7 +177,6 @@ Skip hidden files, `_*`, and optionally skip if `{basename}_frames/` already exi
 
 ### Dependencies
 
-- T-2 (STMap graph reused per asset).
 - T-4 (`render.log` helps debug batch failures) — soft dependency.
 
 ---
@@ -303,7 +233,7 @@ warnings: ["selector 'body' used full viewport"]
 
 ### Dependencies
 
-None — can parallelize with T-2/T-3.
+None — can parallelize with T-3.
 
 ---
 
@@ -337,7 +267,6 @@ Use `nuke.Text_Knob` / `nuke.String_Knob` with `setFlag(nuke.INVISIBLE)` or a de
 
 - [ ] New imports stamp metadata on Color Read.
 - [ ] Re-render overwrites sequence; frame range updates if length changed.
-- [ ] STMap graph survives re-render (connections intact).
 - [ ] Missing source file → clear error, no crash.
 
 ### Files touched
@@ -349,7 +278,6 @@ Use `nuke.Text_Knob` / `nuke.String_Knob` with `setFlag(nuke.INVISIBLE)` or a de
 ### Dependencies
 
 - T-3 (output path stored in metadata).
-- T-2 (STMap graph identification).
 
 ---
 
@@ -441,10 +369,9 @@ None — can run in parallel anytime.
 ## Recommended execution order
 
 ```
-Week 1 — Safety + creative payoff
+Week 1 — Safety + observability
 ├── T-1  Automated smoke test          [P0, no deps]
-├── T-4  render.log                     [parallel]
-└── T-2  Auto STMap graph               [after T-1 green]
+└── T-4  render.log                     [parallel]
 
 Week 2 — Production scale
 ├── T-3a Output path override
@@ -461,17 +388,14 @@ Week 3 — Fidelity + docs
 flowchart TD
     T1[T-1 Smoke test]
     T4[T-4 render.log]
-    T2[T-2 STMap graph]
     T3[T-3 Batch + output path]
     T5[T-5 Re-render Read]
     T6[T-6 rAF scrubbing]
     T7[T-7 Lottie audit]
     T8[T-8 foreignObject]
 
-    T1 --> T2
     T1 --> T6
     T4 --> T3
-    T2 --> T3
     T3 --> T5
     T7 --> T8
 ```
@@ -483,7 +407,6 @@ flowchart TD
 | ID | Task | Owner | Status |
 |----|------|-------|--------|
 | T-1 | `tests/run_smoke.py` + README | | ⬜ |
-| T-2 | `_build_stmap_graph()` in Nuke import | | ⬜ |
 | T-3a | Output directory picker + `--out` wiring | | ⬜ |
 | T-3b | Batch import menu + serial queue | | ⬜ |
 | T-4 | `render.log` in `svg_to_frames.py` | | ⬜ |
@@ -499,7 +422,6 @@ flowchart TD
 | Risk | Impact | Mitigation |
 |------|--------|------------|
 | Smoke test flaky on timing | CI noise | Fixed 256² resolution; deterministic `goToAndStop` for Lottie |
-| STMap node name varies by Nuke version | Graph creation fails | Use `nuke.createNode("STMap")`; test on 14.x + 15.x if available |
 | Batch import floods disk | User error | Confirm total frame estimate; optional skip-existing |
 | rAF shim breaks Lottie | Regression | Detection-gated; T-1 must pass before merge |
 | Re-render stale metadata | Wrong settings | Version stamp in metadata; validate on menu open |
@@ -509,10 +431,9 @@ flowchart TD
 ## Success metrics
 
 1. **T-1:** One command, &lt;2 min, catches sync/alpha regressions.
-2. **T-2:** Artist enables UV → STMap wired; texture plug-in is the only manual step.
-3. **T-3:** Folder of 10 Lotties imports overnight with shared 1920×1080 settings.
-4. **T-4:** Any support ticket includes `render.log` with timing + Lottie meta.
-5. **T-5:** Changing source SVG and clicking re-render updates comp without node surgery.
+2. **T-3:** Folder of 10 Lotties imports overnight with shared 1920×1080 settings.
+3. **T-4:** Any support ticket includes `render.log` with timing + Lottie meta.
+4. **T-5:** Changing source SVG and clicking re-render updates comp without node surgery.
 
 ---
 

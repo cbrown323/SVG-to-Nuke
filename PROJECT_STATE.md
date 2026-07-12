@@ -247,7 +247,7 @@ Additionally, the UV repaint now preserves pixel coverage for **any** input (fix
 
 ## Foreman workflow handoff
 
-**Start here:** `FOREMAN_PLAN.md` — phased plan for smoke test, auto STMap graph, batch import, logging, re-render, and fidelity work.
+**Start here:** `FOREMAN_PLAN.md` — phased plan for smoke test, batch import, logging, re-render, and fidelity work.
 
 **Completed (prior sprint):**
 
@@ -260,8 +260,7 @@ Additionally, the UV repaint now preserves pixel coverage for **any** input (fix
 | Priority | ID | Task |
 |----------|-----|------|
 | P0 | T-1 | Automated smoke test (F-1 / UV alpha regression) |
-| P1 | T-2 | Auto STMap graph on UV import |
-| P2 | T-3 | Batch import + Nuke output path override |
+| P1 | T-3 | Batch import + Nuke output path override |
 | — | T-4–T-8 | `render.log`, re-render Read, rAF scrubbing, Lottie/foreignObject audits |
 
 **Artifacts:**

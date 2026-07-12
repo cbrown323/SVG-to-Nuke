@@ -121,28 +121,6 @@ def _update_read_node(read, pattern, first, last):
     read["origlast"].setValue(last)
 
 
-def _build_stmap_graph(color_read, uv_read, label=None):
-    """Wire Color Read → STMap ← UV Read for retexturing."""
-    if uv_read is None:
-        return None
-    stmap = nuke.createNode("STMap")
-    stmap.setInput(0, color_read)
-    stmap.setInput(1, uv_read)
-    stmap["xpos"].setValue(color_read["xpos"].value())
-    stmap["ypos"].setValue(color_read["ypos"].value() + 80)
-    if label:
-        stmap["label"].setValue(label)
-    nuke.tprint(f"Created STMap node wired to {color_read.name()} and {uv_read.name()}.")
-    return stmap
-
-
-def _find_stmap_for_color(color_read):
-    for node in nuke.allNodes("STMap"):
-        if node.input(0) is color_read:
-            return node
-    return None
-
-
 def _set_invisible_knob(node, name, label, value):
     if node.knob(name):
         node[name].setValue(str(value))
@@ -204,9 +182,9 @@ def _get_svg_metadata(read_node):
 
 
 def _find_import_siblings(color_read):
-    """Locate UV/ID Reads and STMap wired to an SVG color Read."""
+    """Locate UV/ID Reads associated with an SVG color Read."""
     meta = _get_svg_metadata(color_read)
-    siblings = {"color": color_read, "uv": None, "id": None, "stmap": _find_stmap_for_color(color_read)}
+    siblings = {"color": color_read, "uv": None, "id": None}
     if not meta:
         return siblings
 
@@ -306,10 +284,9 @@ def _confirm_overwrite(base, out_dir):
 
 
 def _finish_import_nodes(job, frames):
-    """Create or update Read nodes (+ optional STMap) after a successful rasterize."""
+    """Create or update Read nodes after a successful rasterize."""
     first, last = frames[0], frames[-1]
     existing = job.get("existing_nodes") or {}
-    rerender = bool(job.get("rerender"))
     y_offset = job.get("layout_offset_y", 0)
     x_offset = 110
 
@@ -345,10 +322,6 @@ def _finish_import_nodes(job, frames):
                 f"Created UV pass Read node for {len(uv_frames)} frames "
                 f"({uv_first}-{uv_last})."
             )
-            if not rerender:
-                _build_stmap_graph(color_read, uv_read, label=job["base"])
-            elif not _find_stmap_for_color(color_read):
-                _build_stmap_graph(color_read, uv_read, label=job["base"])
 
     if job["want_id"]:
         id_frames = _find_frames(job["out_dir"], f"{job['base']}.id")
