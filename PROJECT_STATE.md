@@ -247,18 +247,30 @@ Additionally, the UV repaint now preserves pixel coverage for **any** input (fix
 
 ## Foreman workflow handoff
 
-**Start here:**
+**Start here:** `FOREMAN_PLAN.md` — phased plan for smoke test, auto STMap graph, batch import, logging, re-render, and fidelity work.
+
+**Completed (prior sprint):**
 
 1. ~~Apply **F-1 sync fix** to `svg_to_frames.py`~~ — **done 2026-07-12**, merged from `main` + F-5 UV coverage fix.
-2. Re-render emoji sticker asset with UV pass; confirm timing/scale match in Nuke STMap comp (F-4).
+2. Re-render emoji sticker asset with UV pass; confirm timing/scale match in Nuke STMap comp (F-4) — manual, user-side.
 3. ~~Add README + `requirements.txt`~~ — done.
+
+**Next implementation order (see `FOREMAN_PLAN.md`):**
+
+| Priority | ID | Task |
+|----------|-----|------|
+| P0 | T-1 | Automated smoke test (F-1 / UV alpha regression) |
+| P1 | T-2 | Auto STMap graph on UV import |
+| P2 | T-3 | Batch import + Nuke output path override |
+| — | T-4–T-8 | `render.log`, re-render Read, rAF scrubbing, Lottie/foreignObject audits |
 
 **Artifacts:**
 
+- `FOREMAN_PLAN.md` (implementation plan — **read first**)
 - `PROJECT_STATE.md` (this file)
 - `DEV_LOG.md` (development history)
 - `nuke_svg_import.py`, `svg_to_frames.py` (sync fix + UV/ID AOV passes)
-- `test_assets/rocket_test.svg` + `test_assets/check_alpha.py` (alpha-parity regression test)
+- `test_assets/rocket_test.svg` + `test_assets/check_alpha.py` (alpha-parity regression helper; to be wrapped by T-1 smoke test)
 
 ---
 

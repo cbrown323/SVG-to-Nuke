@@ -34,6 +34,7 @@ import json
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -414,6 +415,89 @@ def _emit_progress(pass_name: str, frame: int, total: int):
     print(f"NUKE_PROGRESS\t{pass_name}\t{frame}\t{total}", flush=True)
 
 
+def _script_version() -> str:
+    try:
+        mtime = int(SCRIPT_DIR.joinpath("svg_to_frames.py").stat().st_mtime)
+        return f"mtime:{mtime}"
+    except OSError:
+        return "unknown"
+
+
+class _RenderLog:
+    """Collect settings, timing, and diagnostics; write render.log on exit."""
+
+    def __init__(self, out_dir: Path, input_path: Path, out_pattern: str,
+                 fps: float, frame_count: int, auto_frames: bool,
+                 width: int, height: int, selector: str,
+                 uv_pattern: str = None, id_pattern: str = None):
+        self.out_dir = Path(out_dir)
+        self.input_path = Path(input_path)
+        self.out_pattern = out_pattern
+        self.fps = fps
+        self.frame_count = frame_count
+        self.auto_frames = auto_frames
+        self.width = width
+        self.height = height
+        self.selector = selector
+        self.uv_pattern = uv_pattern
+        self.id_pattern = id_pattern
+        self.warnings = []
+        self.errors = []
+        self.timing = {}
+        self.lottie_meta = None
+        self.detected = None
+        self.frames_written = 0
+        self._t0 = time.monotonic()
+
+    def note_warning(self, msg: str):
+        self.warnings.append(msg)
+
+    def note_error(self, msg: str):
+        self.errors.append(msg)
+
+    def mark(self, key: str):
+        self.timing[key] = int(round((time.monotonic() - self._t0) * 1000))
+
+    def passes(self):
+        items = ["color"]
+        if self.uv_pattern:
+            items.append("uv")
+        if self.id_pattern:
+            items.append("id")
+        return items
+
+    def write(self):
+        self.timing.setdefault("total_ms", int(round((time.monotonic() - self._t0) * 1000)))
+        lines = [
+            "SVG-to-Nuke render log",
+            "======================",
+            f"timestamp_utc: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
+            f"svg_to_frames_version: {_script_version()}",
+            f"input: {self.input_path.resolve()}",
+            f"output_pattern: {self.out_pattern}",
+            (
+                "settings: "
+                f"width={self.width} height={self.height} fps={self.fps} "
+                f"frames={self.frame_count} auto_frames={self.auto_frames} "
+                f"selector={self.selector!r}"
+            ),
+            f"passes: {','.join(self.passes())}",
+        ]
+        if self.lottie_meta is not None:
+            lines.append(f"lottie_meta: {json.dumps(self.lottie_meta, sort_keys=True)}")
+        if self.detected is not None:
+            lines.append(f"detected: {json.dumps(self.detected, sort_keys=True)}")
+        lines.append("timing:")
+        for key in sorted(self.timing):
+            lines.append(f"  {key}: {self.timing[key]}")
+        lines.append(f"frames_written: {self.frames_written}")
+        lines.append(f"errors: {json.dumps(self.errors)}")
+        lines.append(f"warnings: {json.dumps(self.warnings)}")
+        log_path = self.out_dir / "render.log"
+        log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"Render log: {log_path}")
+
+
 def rasterize(input_path: Path, out_pattern: str, fps: float, frame_count: int,
               auto_frames: bool, width: int, height: int, selector: str,
               uv_pattern: str = None, id_pattern: str = None):
@@ -424,182 +508,223 @@ def rasterize(input_path: Path, out_pattern: str, fps: float, frame_count: int,
     if id_pattern:
         Path(id_pattern).parent.mkdir(parents=True, exist_ok=True)
 
-    cleanup = None
-    file_meta = None
+    log = _RenderLog(
+        out_dir, input_path, out_pattern, fps, frame_count, auto_frames,
+        width, height, selector, uv_pattern, id_pattern,
+    )
     if input_path.suffix.lower() == ".json":
-        file_meta = read_lottie_metadata(input_path)
-        target = cleanup = make_lottie_host(input_path, width, height)
-    else:
-        target = input_path
+        log.lottie_meta = read_lottie_metadata(input_path)
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": width, "height": height})
-        page.on("console", lambda msg: print(f"[console:{msg.type}] {msg.text}"))
-        page.on("pageerror", lambda exc: print(f"[pageerror] {exc}"))
-        page.on("requestfailed", lambda req: print(f"[requestfailed] {req.url} — {req.failure}"))
+    cleanup = None
+    file_meta = log.lottie_meta
+    total_frames = 0
+    final_fps = fps
+    info = {"isLottie": False}
 
-        try:
-            page.goto(f"file://{target.resolve()}")
-            page.wait_for_timeout(300)  # let JS / lottie-web finish initializing
+    try:
+        if input_path.suffix.lower() == ".json":
+            target = cleanup = make_lottie_host(input_path, width, height)
+        else:
+            target = input_path
 
-            # If this is a Lottie host, wait until the SVG DOM is actually built.
-            page.evaluate("""
-                async () => {
-                    if (window.__lottieReady) {
-                        await window.__lottieReady;
-                    }
-                }
-            """)
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            log.mark("browser_launch_ms")
+            page = browser.new_page(viewport={"width": width, "height": height})
 
-            # Debug snapshot so you can see exactly what rendered, no matter
-            # what the selector logic below does.
-            debug_path = str(out_dir / "_debug_first_load.png")
-            page.screenshot(path=debug_path, omit_background=True)
-            print(f"Debug screenshot of the loaded page: {debug_path}")
+            def _on_console(msg):
+                text = msg.text
+                if msg.type in ("warning", "error"):
+                    log.note_warning(f"[console:{msg.type}] {text}")
+                print(f"[console:{msg.type}] {text}")
 
-            info = page.evaluate("""
-                () => {
-                    if (window.lottieAnim) {
-                        return {
-                            isLottie: true,
-                            totalFrames: window.lottieAnim.totalFrames,
-                            frameRate: window.lottieAnim.frameRate,
-                            ip: window.lottieAnim.firstFrame
-                        };
-                    }
-                    return { isLottie: false };
-                }
-            """)
+            page.on("console", _on_console)
+            page.on("pageerror", lambda exc: log.note_error(f"[pageerror] {exc}"))
+            page.on(
+                "requestfailed",
+                lambda req: log.note_warning(
+                    f"[requestfailed] {req.url} — {req.failure}"
+                ),
+            )
 
-            # .json inputs always use on-disk Lottie timing when metadata is valid,
-            # even if the browser player failed to report totals.
-            if info["isLottie"] or file_meta:
-                frame_rate = float(
-                    (file_meta or {}).get("frameRate")
-                    or info.get("frameRate")
-                    or fps
-                )
-                native_frames = int(
-                    (file_meta or {}).get("totalFrames")
-                    or round(info.get("totalFrames") or 0)
-                    or 0
-                )
-                if auto_frames:
-                    total_frames = max(1, native_frames)
-                    print(f"Auto-detected Lottie loop: {total_frames} frames @ {frame_rate} fps "
-                          f"(native — not conformed to panel FPS)")
-                else:
-                    total_frames = max(1, int(frame_count))
-                    print(f"Using {total_frames} frames @ {frame_rate} fps (Lottie native rate)")
-                info["isLottie"] = True
-                lottie_start = int(
-                    (file_meta or {}).get("ip")
-                    or info.get("ip")
-                    or 0
-                )
-            else:
-                lottie_start = 0
-                frame_rate = float(fps)
-                if auto_frames:
-                    cycle = page.evaluate(DETECT_LOOP_DURATION_JS)
-                    cycle_sec = float(cycle.get("cycleSeconds") or 0)
-                    if cycle_sec > 0:
-                        total_frames = max(1, int(round(cycle_sec * frame_rate)))
-                        print(f"Auto-detected loop: {cycle_sec:.3f}s -> {total_frames} frames @ {frame_rate} fps")
-                    else:
-                        total_frames = max(1, int(frame_count))
-                        print(f"Warning: could not detect loop duration — using {total_frames} frames @ {frame_rate} fps")
-                else:
-                    total_frames = max(1, int(frame_count))
-                    print(f"Using {total_frames} frames @ {frame_rate} fps")
+            try:
+                page.goto(f"file://{target.resolve()}")
+                page.wait_for_timeout(300)  # let JS / lottie-web finish initializing
 
-            # Pause every animation layer up front so nothing drifts in real time
-            # while we inject UV shaders or take a second screenshot.
-            page.evaluate(PAUSE_ALL_JS)
-
-            # Compute the crop region ONCE, up front, rather than re-checking the
-            # selector's stability every frame — locator().screenshot() waits for
-            # the element to stop moving before it'll shoot, which never happens
-            # on a continuously animating element and causes a hang/timeout.
-            clip_box = None
-            if selector and selector != "body":
-                box = page.locator(selector).bounding_box()
-                if box:
-                    clip_box = {"x": box["x"], "y": box["y"],
-                                "width": box["width"], "height": box["height"]}
-                else:
-                    print(f"Warning: selector '{selector}' not found — using full viewport instead")
-
-            def sync_to_frame(frame_index: int):
-                page.evaluate(_sync_js(info["isLottie"], frame_index, frame_rate, lottie_start))
-                # Double-rAF so layout/paint settle on the scrubbed pose before capture.
+                # If this is a Lottie host, wait until the SVG DOM is actually built.
                 page.evaluate("""
-                    () => new Promise(resolve => {
-                        requestAnimationFrame(() => requestAnimationFrame(resolve));
-                    })
+                    async () => {
+                        if (window.__lottieReady) {
+                            await window.__lottieReady;
+                        }
+                    }
                 """)
 
-            def grab(path: str):
-                if clip_box:
-                    page.screenshot(path=path, clip=clip_box, omit_background=True)
+                # Debug snapshot so you can see exactly what rendered, no matter
+                # what the selector logic below does.
+                debug_path = str(out_dir / "_debug_first_load.png")
+                page.screenshot(path=debug_path, omit_background=True)
+                print(f"Debug screenshot of the loaded page: {debug_path}")
+
+                info = page.evaluate("""
+                    () => {
+                        if (window.lottieAnim) {
+                            return {
+                                isLottie: true,
+                                totalFrames: window.lottieAnim.totalFrames,
+                                frameRate: window.lottieAnim.frameRate,
+                                ip: window.lottieAnim.firstFrame
+                            };
+                        }
+                        return { isLottie: false };
+                    }
+                """)
+                log.detected = info
+
+                # .json inputs always use on-disk Lottie timing when metadata is valid,
+                # even if the browser player failed to report totals.
+                if info["isLottie"] or file_meta:
+                    frame_rate = float(
+                        (file_meta or {}).get("frameRate")
+                        or info.get("frameRate")
+                        or fps
+                    )
+                    native_frames = int(
+                        (file_meta or {}).get("totalFrames")
+                        or round(info.get("totalFrames") or 0)
+                        or 0
+                    )
+                    if auto_frames:
+                        total_frames = max(1, native_frames)
+                        print(f"Auto-detected Lottie loop: {total_frames} frames @ {frame_rate} fps "
+                              f"(native — not conformed to panel FPS)")
+                    else:
+                        total_frames = max(1, int(frame_count))
+                        print(f"Using {total_frames} frames @ {frame_rate} fps (Lottie native rate)")
+                    info["isLottie"] = True
+                    lottie_start = int(
+                        (file_meta or {}).get("ip")
+                        or info.get("ip")
+                        or 0
+                    )
                 else:
-                    page.screenshot(path=path, omit_background=True)
+                    lottie_start = 0
+                    frame_rate = float(fps)
+                    if auto_frames:
+                        cycle = page.evaluate(DETECT_LOOP_DURATION_JS)
+                        cycle_sec = float(cycle.get("cycleSeconds") or 0)
+                        if cycle_sec > 0:
+                            total_frames = max(1, int(round(cycle_sec * frame_rate)))
+                            print(f"Auto-detected loop: {cycle_sec:.3f}s -> {total_frames} frames @ {frame_rate} fps")
+                        else:
+                            total_frames = max(1, int(frame_count))
+                            msg = (
+                                f"Could not detect loop duration — using {total_frames} "
+                                f"frames @ {frame_rate} fps"
+                            )
+                            print(f"Warning: {msg}")
+                            log.note_warning(msg)
+                    else:
+                        total_frames = max(1, int(frame_count))
+                        print(f"Using {total_frames} frames @ {frame_rate} fps")
 
-            passes = ["color"]
-            if uv_pattern:
-                passes.append("uv")
-            if id_pattern:
-                passes.append("id")
-            _emit_meta("total_frames", str(total_frames))
-            _emit_meta("passes", ",".join(passes))
+                # Pause every animation layer up front so nothing drifts in real time
+                # while we inject UV shaders or take a second screenshot.
+                page.evaluate(PAUSE_ALL_JS)
 
-            # Finish every color frame first, then each AOV pass in order.
-            # Interleaving passes let wall-clock SMIL/CSS clocks (and slow DOM
-            # mutation) sample different poses under the same frame index.
-            for i in range(total_frames):
-                sync_to_frame(i)
-                path = out_pattern.replace("####", f"{i + 1:04d}")
-                grab(path)
-                _emit_progress("color", i + 1, total_frames)
-                _emit_meta("last_file", path)
+                # Compute the crop region ONCE, up front, rather than re-checking the
+                # selector's stability every frame — locator().screenshot() waits for
+                # the element to stop moving before it'll shoot, which never happens
+                # on a continuously animating element and causes a hang/timeout.
+                clip_box = None
+                if selector and selector != "body":
+                    box = page.locator(selector).bounding_box()
+                    if box:
+                        clip_box = {"x": box["x"], "y": box["y"],
+                                    "width": box["width"], "height": box["height"]}
+                    else:
+                        msg = f"selector '{selector}' not found — using full viewport instead"
+                        print(f"Warning: {msg}")
+                        log.note_warning(msg)
 
-            if uv_pattern:
+                def sync_to_frame(frame_index: int):
+                    page.evaluate(_sync_js(info["isLottie"], frame_index, frame_rate, lottie_start))
+                    # Double-rAF so layout/paint settle on the scrubbed pose before capture.
+                    page.evaluate("""
+                        () => new Promise(resolve => {
+                            requestAnimationFrame(() => requestAnimationFrame(resolve));
+                        })
+                    """)
+
+                def grab(path: str):
+                    if clip_box:
+                        page.screenshot(path=path, clip=clip_box, omit_background=True)
+                    else:
+                        page.screenshot(path=path, omit_background=True)
+
+                passes = log.passes()
+                _emit_meta("total_frames", str(total_frames))
+                _emit_meta("passes", ",".join(passes))
+
+                color_t0 = time.monotonic()
+                # Finish every color frame first, then each AOV pass in order.
+                # Interleaving passes let wall-clock SMIL/CSS clocks (and slow DOM
+                # mutation) sample different poses under the same frame index.
                 for i in range(total_frames):
                     sync_to_frame(i)
-                    page.evaluate(APPLY_UV_JS)
-                    # Re-assert pose after DOM mutation; style.fill overrides Lottie
-                    # presentation attributes, so AOV fills survive goToAndStop.
-                    sync_to_frame(i)
-                    path = uv_pattern.replace("####", f"{i + 1:04d}")
+                    path = out_pattern.replace("####", f"{i + 1:04d}")
                     grab(path)
-                    page.evaluate(CLEAR_UV_JS)
-                    _emit_progress("uv", i + 1, total_frames)
+                    _emit_progress("color", i + 1, total_frames)
                     _emit_meta("last_file", path)
+                log.timing["color_pass_ms"] = int(round((time.monotonic() - color_t0) * 1000))
 
-            if id_pattern:
-                for i in range(total_frames):
-                    sync_to_frame(i)
-                    page.evaluate(APPLY_ID_JS)
-                    sync_to_frame(i)
-                    path = id_pattern.replace("####", f"{i + 1:04d}")
-                    grab(path)
-                    page.evaluate(CLEAR_ID_JS)
-                    _emit_progress("id", i + 1, total_frames)
-                    _emit_meta("last_file", path)
-        finally:
-            page.close()
-            browser.close()
+                if uv_pattern:
+                    uv_t0 = time.monotonic()
+                    for i in range(total_frames):
+                        sync_to_frame(i)
+                        page.evaluate(APPLY_UV_JS)
+                        # Re-assert pose after DOM mutation; style.fill overrides Lottie
+                        # presentation attributes, so AOV fills survive goToAndStop.
+                        sync_to_frame(i)
+                        path = uv_pattern.replace("####", f"{i + 1:04d}")
+                        grab(path)
+                        page.evaluate(CLEAR_UV_JS)
+                        _emit_progress("uv", i + 1, total_frames)
+                        _emit_meta("last_file", path)
+                    log.timing["uv_pass_ms"] = int(round((time.monotonic() - uv_t0) * 1000))
 
-    if cleanup:
-        _safe_unlink(cleanup)
+                if id_pattern:
+                    id_t0 = time.monotonic()
+                    for i in range(total_frames):
+                        sync_to_frame(i)
+                        page.evaluate(APPLY_ID_JS)
+                        sync_to_frame(i)
+                        path = id_pattern.replace("####", f"{i + 1:04d}")
+                        grab(path)
+                        page.evaluate(CLEAR_ID_JS)
+                        _emit_progress("id", i + 1, total_frames)
+                        _emit_meta("last_file", path)
+                    log.timing["id_pass_ms"] = int(round((time.monotonic() - id_t0) * 1000))
+            finally:
+                page.close()
+                browser.close()
 
-    final_fps = info["frameRate"] if info["isLottie"] else fps
-    print(f"Done — wrote {total_frames} frames to {out_dir}")
-    if uv_pattern:
-        print(f"Done — wrote {total_frames} UV-pass frames to {Path(uv_pattern).parent}")
-    if id_pattern:
-        print(f"Done — wrote {total_frames} ID-pass frames to {Path(id_pattern).parent}")
+        if cleanup:
+            _safe_unlink(cleanup)
+
+        final_fps = info["frameRate"] if info["isLottie"] else fps
+        log.frames_written = total_frames
+        print(f"Done — wrote {total_frames} frames to {out_dir}")
+        if uv_pattern:
+            print(f"Done — wrote {total_frames} UV-pass frames to {Path(uv_pattern).parent}")
+        if id_pattern:
+            print(f"Done — wrote {total_frames} ID-pass frames to {Path(id_pattern).parent}")
+    except Exception as exc:
+        log.note_error(str(exc))
+        raise
+    finally:
+        log.write()
+
     return total_frames, final_fps
 
 

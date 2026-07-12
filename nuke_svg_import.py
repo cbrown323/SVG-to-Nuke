@@ -73,6 +73,21 @@ def _make_read_node(pattern, first, last, label=None):
     return read
 
 
+def _build_stmap_graph(color_read, uv_read, label=None):
+    """Wire Color Read → STMap ← UV Read for retexturing."""
+    if uv_read is None:
+        return None
+    stmap = nuke.createNode("STMap")
+    stmap.setInput(0, color_read)
+    stmap.setInput(1, uv_read)
+    stmap["xpos"].setValue(color_read["xpos"].value())
+    stmap["ypos"].setValue(color_read["ypos"].value() + 80)
+    if label:
+        stmap["label"].setValue(label)
+    nuke.tprint(f"Created STMap node wired to {color_read.name()} and {uv_read.name()}.")
+    return stmap
+
+
 def _read_lottie_metadata(path):
     """Return {frameRate, totalFrames} from a Lottie JSON, or None."""
     if not path or os.path.splitext(path)[1].lower() != ".json":
@@ -94,40 +109,57 @@ def _read_lottie_metadata(path):
 
 
 class _ImportAnimatedSvgPanel(QtWidgets.QDialog):
-    """Import panel with frame count + Auto toggle (Auto disables manual frames)."""
+    """Import panel with Auto toggles for frame count and FPS."""
+
+    DEFAULT_FPS = 30.0
+    _FIELD_WIDTH = 72
 
     def __init__(self, default_fps, lottie_meta=None):
         parent = nuke.mainWindow() if hasattr(nuke, "mainWindow") else None
         super().__init__(parent)
         self.setWindowTitle("Import Animated SVG")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(260)
+        self.setMaximumWidth(300)
         self._lottie_meta = lottie_meta
+        self._default_fps = default_fps
 
         layout = QtWidgets.QFormLayout(self)
+        layout.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldsStayAtSizeHint)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(6)
 
-        self.width_edit = QtWidgets.QLineEdit("1920")
-        self.height_edit = QtWidgets.QLineEdit("1080")
-
-        native_fps = (
-            lottie_meta["frameRate"] if lottie_meta else default_fps
-        )
         native_frames = (
             lottie_meta["totalFrames"] if lottie_meta else 72
         )
 
-        self.fps_edit = QtWidgets.QLineEdit(
-            str(int(native_fps) if float(native_fps).is_integer() else native_fps)
-        )
+        self.width_edit = QtWidgets.QLineEdit("1920")
+        self.height_edit = QtWidgets.QLineEdit("1080")
+        self.fps_edit = QtWidgets.QLineEdit(self._auto_fps_text())
         self.frames_edit = QtWidgets.QLineEdit(str(int(native_frames)))
+        for edit in (self.width_edit, self.height_edit, self.fps_edit, self.frames_edit):
+            edit.setFixedWidth(self._FIELD_WIDTH)
+
+        fps_row = QtWidgets.QWidget()
+        fps_layout = QtWidgets.QHBoxLayout(fps_row)
+        fps_layout.setContentsMargins(0, 0, 0, 0)
+        fps_layout.setSpacing(6)
+        self.auto_fps_cb = QtWidgets.QCheckBox("Auto")
+        self.auto_fps_cb.setChecked(True)
+        self.auto_fps_cb.setToolTip(
+            "Use 30 fps, or the Lottie file's native rate for JSON inputs."
+        )
+        fps_layout.addWidget(self.fps_edit)
+        fps_layout.addWidget(self.auto_fps_cb)
 
         frames_row = QtWidgets.QWidget()
         frames_layout = QtWidgets.QHBoxLayout(frames_row)
         frames_layout.setContentsMargins(0, 0, 0, 0)
+        frames_layout.setSpacing(6)
         self.auto_frames_cb = QtWidgets.QCheckBox("Auto")
         self.auto_frames_cb.setChecked(True)
         self.auto_frames_cb.setToolTip(
             "Use the animation's native loop length "
-            "(Lottie: frame count + fps from the JSON)."
+            "(Lottie: frame count from the JSON)."
         )
         frames_layout.addWidget(self.frames_edit)
         frames_layout.addWidget(self.auto_frames_cb)
@@ -140,15 +172,13 @@ class _ImportAnimatedSvgPanel(QtWidgets.QDialog):
             )
             self.meta_label.setStyleSheet("color: #8af;")
 
-        self.uv_pass_cb = QtWidgets.QCheckBox("UV Pass (for retexturing with STMap)")
-        self.id_pass_cb = QtWidgets.QCheckBox(
-            "Object ID Pass (unique RGB per fill/stroke for mattes)"
-        )
+        self.uv_pass_cb = QtWidgets.QCheckBox("UV Pass")
+        self.id_pass_cb = QtWidgets.QCheckBox("Object ID Pass")
 
         layout.addRow("Width", self.width_edit)
         layout.addRow("Height", self.height_edit)
         layout.addRow("Frames", frames_row)
-        layout.addRow("FPS", self.fps_edit)
+        layout.addRow("FPS", fps_row)
         if lottie_meta:
             layout.addRow("", self.meta_label)
         layout.addRow("", self.uv_pass_cb)
@@ -161,22 +191,29 @@ class _ImportAnimatedSvgPanel(QtWidgets.QDialog):
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
 
-        self.auto_frames_cb.toggled.connect(self._on_auto_toggled)
-        self._on_auto_toggled(self.auto_frames_cb.isChecked())
+        self.auto_fps_cb.toggled.connect(self._on_auto_fps_toggled)
+        self.auto_frames_cb.toggled.connect(self._on_auto_frames_toggled)
+        self._on_auto_fps_toggled(self.auto_fps_cb.isChecked())
+        self._on_auto_frames_toggled(self.auto_frames_cb.isChecked())
 
-    def _on_auto_toggled(self, checked):
-        # Auto: cannot enter a frame amount. For Lottie JSON, also lock FPS to
-        # the file's native rate so Nuke project fps (e.g. 24) cannot shrink
-        # 180@30 into 144 (= 6s * 24).
-        self.frames_edit.setEnabled(not checked)
+    def _format_fps(self, fps):
+        fps = float(fps)
+        return str(int(fps) if fps.is_integer() else fps)
+
+    def _auto_fps_text(self):
         if self._lottie_meta:
-            self.fps_edit.setEnabled(not checked)
-            if checked:
-                fr = self._lottie_meta["frameRate"]
-                self.fps_edit.setText(
-                    str(int(fr) if float(fr).is_integer() else fr)
-                )
-                self.frames_edit.setText(str(self._lottie_meta["totalFrames"]))
+            return self._format_fps(self._lottie_meta["frameRate"])
+        return self._format_fps(self._default_fps)
+
+    def _on_auto_fps_toggled(self, checked):
+        self.fps_edit.setEnabled(not checked)
+        if checked:
+            self.fps_edit.setText(self._auto_fps_text())
+
+    def _on_auto_frames_toggled(self, checked):
+        self.frames_edit.setEnabled(not checked)
+        if checked and self._lottie_meta:
+            self.frames_edit.setText(str(self._lottie_meta["totalFrames"]))
 
     def values(self):
         return {
@@ -185,6 +222,7 @@ class _ImportAnimatedSvgPanel(QtWidgets.QDialog):
             "frames": self.frames_edit.text(),
             "fps": self.fps_edit.text(),
             "auto_frames": self.auto_frames_cb.isChecked(),
+            "auto_fps": self.auto_fps_cb.isChecked(),
             "uv_pass": self.uv_pass_cb.isChecked(),
             "id_pass": self.id_pass_cb.isChecked(),
         }
@@ -380,6 +418,7 @@ class _RasterizeProgressDialog(QtWidgets.QDialog):
                 f"Created UV pass Read node for {len(uv_frames)} frames "
                 f"({uv_first}-{uv_last})."
             )
+            _build_stmap_graph(color_read, uv_read, label=job["base"])
 
         if job["want_id"]:
             id_frames = _find_frames(out_dir, f"{base}.id")
@@ -423,11 +462,15 @@ def import_animated_svg():
     frames = opts["frames"]
     fps = opts["fps"]
     auto_frames = opts["auto_frames"]
+    auto_fps = opts["auto_fps"]
     want_uv = opts["uv_pass"]
     want_id = opts["id_pass"]
 
-    if auto_frames and lottie_meta:
-        fps = str(lottie_meta["frameRate"])
+    if auto_fps:
+        if lottie_meta:
+            fps = str(lottie_meta["frameRate"])
+        else:
+            fps = str(int(_ImportAnimatedSvgPanel.DEFAULT_FPS))
 
     uv_pattern = out_pattern.replace("####", "uv.####") if want_uv else None
     id_pattern = out_pattern.replace("####", "id.####") if want_id else None

@@ -1,5 +1,6 @@
 .venv-test/
 test_assets/out/
 test_assets/out_auto/
+tests/out_*/
 __pycache__/
 .DS_Store

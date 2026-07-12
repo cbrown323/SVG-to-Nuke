@@ -224,6 +224,24 @@ python svg_to_frames.py test_assets/sample_bounce.json \
   --out /tmp/sample.####.png --auto-frames --width 256 --height 256
 ```
 
+### Development / smoke test
+
+Full regression suite (Lottie color + SVG/UV alpha parity, no Nuke required):
+
+```bash
+pip install -r requirements.txt pillow
+playwright install chromium
+python tests/run_smoke.py
+```
+
+Or use the shell wrapper:
+
+```bash
+bash tests/smoke_test.sh
+```
+
+Expected runtime is under 2 minutes at 256². A passing run prints `SMOKE OK`.
+
 Useful flags:
 
 | Flag | Description |
@@ -246,6 +264,7 @@ path/to/rocket_frames/
   rocket.0002.png
   rocket.uv.0001.png      # if UV pass enabled
   rocket.id.0001.png      # if Object ID pass enabled
+  render.log              # settings, timing, Lottie meta, warnings/errors
   _debug_first_load.png   # debug snapshot (every run)
 ```
 
