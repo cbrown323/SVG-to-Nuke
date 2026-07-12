@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-07-12  
 **Repo:** https://github.com/cbrown323/SVG-to-Nuke  
-**Status:** F-1 sync fix hardened (SMIL clock + two-pass). Re-render required in Nuke to validate.
+**Status:** F-1 UV sync confirmed. Auto frame count now uses native Lottie `fr`/`op` (fixes 180→144 conform). Re-render cycling clip to clear leg freeze.
 
 ---
 

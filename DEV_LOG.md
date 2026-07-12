@@ -271,6 +271,37 @@ User asked for normal pass output. Claude acknowledged but focused on sync fix f
 
 ---
 
+---
+
+## 2026-07-12 — Session 5: Native Lottie frame count (180 vs 144) + leg freeze (Foreman)
+
+### Context
+
+- User: Girl cycling animation is **180 frames** on LottieFiles, but Nuke render was **144**.
+- From frame 74, legs duplicate/freeze through end (color + UV); clears on loop to frame 1.
+- UV sync still good — do not regress capture sync.
+
+### Findings
+
+- Asset JSON: `fr=30`, `ip=0`, `op=180` → **180 frames / 6.0s**.
+- **144 = 6s × Nuke 24fps** — Auto conformed duration to project FPS instead of native Lottie frames.
+- At t≈3.0s (frame 74 of a 144@24 timebase ≈ Lottie frame 90), overlapping AE layers (`lady` / `nature` segments) produce extra visible paths → ghosted/frozen legs.
+- Fix: Auto must use JSON `op-ip` + `fr`, never `duration * nuke_fps`. Lottie scrub = `goToAndStop(frame)` only (no `svg.setCurrentTime` on Lottie SVG).
+
+### Changes
+
+1. `read_lottie_metadata()` — disk parse of `fr`/`ip`/`op`.
+2. Auto Lottie path always uses native totals; ignores panel FPS for length.
+3. Lottie `_sync_js`: frame scrub only; CSS only outside `#anim svg`.
+4. Nuke panel: shows native meta, Auto locks Frames + FPS for `.json`.
+
+### Testing
+
+- `--fps 24 --auto-frames` on Girl Cycling JSON → **180 @ 30** (not 144).
+- Sync JS assertions: Lottie path has no `setCurrentTime`.
+
+---
+
 ## Template for future entries
 
 ```markdown

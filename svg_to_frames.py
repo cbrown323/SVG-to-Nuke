@@ -186,18 +186,53 @@ def make_lottie_host(json_path: Path, width: int, height: int) -> Path:
     return tmp
 
 
+def read_lottie_metadata(json_path: Path):
+    """Read native fr / frame count from a Lottie JSON without starting a browser."""
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or "fr" not in data or "op" not in data:
+        return None
+    fr = float(data.get("fr") or 0)
+    ip = float(data.get("ip") or 0)
+    op = float(data.get("op") or 0)
+    if fr <= 0 or op <= ip:
+        return None
+    return {
+        "frameRate": fr,
+        "ip": ip,
+        "op": op,
+        "totalFrames": int(round(op - ip)),
+    }
+
+
 def _sync_js(is_lottie: bool, frame_index: int, frame_rate: float) -> str:
-    """JS that re-asserts Lottie + CSS/WAAPI + SMIL clocks for one frame."""
+    """Re-assert timelines for one frame.
+
+    Lottie: frame-accurate goToAndStop only, plus CSS/WAAPI outside the Lottie
+    SVG (hybrid overlays). Do NOT drive svg.setCurrentTime on Lottie's SVG —
+    that time-scrubs overlapping AE layers and ghosts limbs past segment joins.
+
+    Non-Lottie: CSS/WAAPI + SMIL clocks.
+    """
     t_ms = (frame_index / frame_rate) * 1000.0
     t_sec = t_ms / 1000.0
-    lottie_line = (
-        f"window.lottieAnim.goToAndStop({frame_index}, true);"
-        if is_lottie else
-        ""
-    )
+    if is_lottie:
+        return f"""
+() => {{
+    if (window.lottieAnim) {{
+        window.lottieAnim.goToAndStop({frame_index}, true);
+    }}
+    document.getAnimations({{subtree: true}}).forEach(a => {{
+        const target = a.effect && a.effect.target;
+        if (target && target.closest && target.closest('#anim svg')) {{
+            return;
+        }}
+        a.pause();
+        a.currentTime = {t_ms};
+    }});
+}}
+"""
     return f"""
 () => {{
-    {lottie_line}
     document.getAnimations({{subtree: true}}).forEach(a => {{
         a.pause();
         a.currentTime = {t_ms};
@@ -221,7 +256,9 @@ def rasterize(input_path: Path, out_pattern: str, fps: float, frame_count: int,
         Path(uv_pattern).parent.mkdir(parents=True, exist_ok=True)
 
     cleanup = None
+    file_meta = None
     if input_path.suffix.lower() == ".json":
+        file_meta = read_lottie_metadata(input_path)
         target = cleanup = make_lottie_host(input_path, width, height)
     else:
         target = input_path
@@ -264,14 +301,27 @@ def rasterize(input_path: Path, out_pattern: str, fps: float, frame_count: int,
             }
         """)
 
-        if info["isLottie"]:
-            frame_rate = float(info["frameRate"] or fps)
+        # .json inputs always use on-disk Lottie timing when metadata is valid,
+        # even if the browser player failed to report totals.
+        if info["isLottie"] or file_meta:
+            frame_rate = float(
+                (file_meta or {}).get("frameRate")
+                or info.get("frameRate")
+                or fps
+            )
+            native_frames = int(
+                (file_meta or {}).get("totalFrames")
+                or round(info.get("totalFrames") or 0)
+                or 0
+            )
             if auto_frames:
-                total_frames = int(round(info["totalFrames"]))
-                print(f"Auto-detected Lottie loop: {total_frames} frames @ {frame_rate} fps")
+                total_frames = max(1, native_frames)
+                print(f"Auto-detected Lottie loop: {total_frames} frames @ {frame_rate} fps "
+                      f"(native — not conformed to panel FPS)")
             else:
                 total_frames = max(1, int(frame_count))
-                print(f"Using {total_frames} frames @ {frame_rate} fps (Lottie)")
+                print(f"Using {total_frames} frames @ {frame_rate} fps (Lottie native rate)")
+            info["isLottie"] = True
         else:
             frame_rate = float(fps)
             if auto_frames:
