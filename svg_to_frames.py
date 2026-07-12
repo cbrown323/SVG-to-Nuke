@@ -202,6 +202,64 @@ CLEAR_NORMAL_JS = """
 }
 """
 
+# Object ID / puzzle-matte pass: each fill and each stroke gets a unique saturated
+# RGB. Strokes are only assigned an ID when the element actually renders a stroke.
+APPLY_ID_JS = """
+() => {
+    function idToColor(id) {
+        const hue = (id * 137.508) % 360;
+        const s = 0.82, v = 0.96;
+        const c = v * s;
+        const x = c * (1 - Math.abs((hue / 60) % 2 - 1));
+        const m = v - c;
+        let r = 0, g = 0, b = 0;
+        if (hue < 60) { r = c; g = x; }
+        else if (hue < 120) { r = x; g = c; }
+        else if (hue < 180) { g = c; b = x; }
+        else if (hue < 240) { g = x; b = c; }
+        else if (hue < 300) { r = x; b = c; }
+        else { r = c; b = x; }
+        return `rgb(${Math.round((r + m) * 255)},${Math.round((g + m) * 255)},${Math.round((b + m) * 255)})`;
+    }
+
+    const root = document.querySelector('#anim svg') || document.querySelector('svg');
+    if (!root) return;
+    let nextId = 1;
+    const shapes = root.querySelectorAll(
+        'path, rect, circle, ellipse, polygon, polyline, line, text, tspan, use');
+    shapes.forEach(el => {
+        if (el.closest('clipPath, mask, pattern, marker, filter')) return;
+        const cs = window.getComputedStyle(el);
+        const hasFill = cs.fill !== 'none';
+        const hasStroke = cs.stroke !== 'none' && parseFloat(cs.strokeWidth) > 0;
+        if (!hasFill && !hasStroke) return;
+
+        let fillPaint = 'none';
+        let strokePaint = 'none';
+        if (hasFill) fillPaint = idToColor(nextId++);
+        if (hasStroke) strokePaint = idToColor(nextId++);
+
+        el.setAttribute('data-nuke-id-applied', '1');
+        el.setAttribute('data-nuke-orig-fill', el.style.fill || '');
+        el.setAttribute('data-nuke-orig-stroke', el.style.stroke || '');
+        el.style.fill = fillPaint;
+        el.style.stroke = strokePaint;
+    });
+}
+"""
+
+CLEAR_ID_JS = """
+() => {
+    document.querySelectorAll('[data-nuke-id-applied]').forEach(el => {
+        el.style.fill = el.getAttribute('data-nuke-orig-fill') || '';
+        el.style.stroke = el.getAttribute('data-nuke-orig-stroke') || '';
+        el.removeAttribute('data-nuke-orig-fill');
+        el.removeAttribute('data-nuke-orig-stroke');
+        el.removeAttribute('data-nuke-id-applied');
+    });
+}
+"""
+
 # Probe one animation loop cycle for SVG/SMIL/CSS assets (ignores repeat/infinite).
 DETECT_LOOP_DURATION_JS = """
 () => {
@@ -361,13 +419,16 @@ def _emit_progress(pass_name: str, frame: int, total: int):
 
 def rasterize(input_path: Path, out_pattern: str, fps: float, frame_count: int,
               auto_frames: bool, width: int, height: int, selector: str,
-              uv_pattern: str = None, normal_pattern: str = None):
+              uv_pattern: str = None, normal_pattern: str = None,
+              id_pattern: str = None):
     out_dir = Path(out_pattern).parent
     out_dir.mkdir(parents=True, exist_ok=True)
     if uv_pattern:
         Path(uv_pattern).parent.mkdir(parents=True, exist_ok=True)
     if normal_pattern:
         Path(normal_pattern).parent.mkdir(parents=True, exist_ok=True)
+    if id_pattern:
+        Path(id_pattern).parent.mkdir(parents=True, exist_ok=True)
 
     cleanup = None
     file_meta = None
@@ -488,6 +549,8 @@ def rasterize(input_path: Path, out_pattern: str, fps: float, frame_count: int,
             passes.append("uv")
         if normal_pattern:
             passes.append("normal")
+        if id_pattern:
+            passes.append("id")
         _emit_meta("total_frames", str(total_frames))
         _emit_meta("passes", ",".join(passes))
 
@@ -525,6 +588,17 @@ def rasterize(input_path: Path, out_pattern: str, fps: float, frame_count: int,
                 _emit_progress("normal", i + 1, total_frames)
                 _emit_meta("last_file", path)
 
+        if id_pattern:
+            for i in range(total_frames):
+                sync_to_frame(i)
+                page.evaluate(APPLY_ID_JS)
+                sync_to_frame(i)
+                path = id_pattern.replace("####", f"{i + 1:04d}")
+                grab(path)
+                page.evaluate(CLEAR_ID_JS)
+                _emit_progress("id", i + 1, total_frames)
+                _emit_meta("last_file", path)
+
         browser.close()
 
     if cleanup:
@@ -536,6 +610,8 @@ def rasterize(input_path: Path, out_pattern: str, fps: float, frame_count: int,
         print(f"Done — wrote {total_frames} UV-pass frames to {Path(uv_pattern).parent}")
     if normal_pattern:
         print(f"Done — wrote {total_frames} normal-pass frames to {Path(normal_pattern).parent}")
+    if id_pattern:
+        print(f"Done — wrote {total_frames} ID-pass frames to {Path(id_pattern).parent}")
     return total_frames, final_fps
 
 
@@ -545,7 +621,7 @@ def main():
     ap.add_argument("input", type=Path, help="Input .svg, .html, or .json (Lottie) file")
     ap.add_argument("--out", default="frames/anim.####.png",
                      help="Output pattern using #### for the frame number")
-    ap.add_argument("--fps", type=float, default=24,
+    ap.add_argument("--fps", type=float, default=30,
                      help="Frame rate for time-based scrubbing and auto frame math")
     ap.add_argument("--frames", type=int, default=72,
                      help="Frame count when --auto-frames is not set (ignored with --auto-frames)")
@@ -565,6 +641,11 @@ def main():
     ap.add_argument("--normal-out", default=None,
                      help="Output pattern for the normal pass (default: derived from --out "
                           "by inserting 'normal.' before the frame number)")
+    ap.add_argument("--id-pass", action="store_true",
+                     help="Also render an Object ID pass (unique RGB per fill/stroke matte)")
+    ap.add_argument("--id-out", default=None,
+                     help="Output pattern for the ID pass (default: derived from --out "
+                          "by inserting 'id.' before the frame number)")
     args = ap.parse_args()
 
     if not args.input.exists():
@@ -578,8 +659,13 @@ def main():
     if args.normal_pass:
         normal_pattern = args.normal_out or args.out.replace("####", "normal.####")
 
+    id_pattern = None
+    if args.id_pass:
+        id_pattern = args.id_out or args.out.replace("####", "id.####")
+
     rasterize(args.input, args.out, args.fps, args.frames, args.auto_frames,
-              args.width, args.height, args.selector, uv_pattern, normal_pattern)
+              args.width, args.height, args.selector, uv_pattern, normal_pattern,
+              id_pattern)
 
 
 if __name__ == "__main__":

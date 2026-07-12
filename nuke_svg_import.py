@@ -144,6 +144,9 @@ class _ImportAnimatedSvgPanel(QtWidgets.QDialog):
         self.normal_pass_cb = QtWidgets.QCheckBox(
             "Normal Pass (flat Z+ per shape, for relighting)"
         )
+        self.id_pass_cb = QtWidgets.QCheckBox(
+            "Object ID Pass (unique RGB per fill/stroke for mattes)"
+        )
 
         layout.addRow("Width", self.width_edit)
         layout.addRow("Height", self.height_edit)
@@ -153,6 +156,7 @@ class _ImportAnimatedSvgPanel(QtWidgets.QDialog):
             layout.addRow("", self.meta_label)
         layout.addRow("", self.uv_pass_cb)
         layout.addRow("", self.normal_pass_cb)
+        layout.addRow("", self.id_pass_cb)
 
         buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
@@ -187,6 +191,7 @@ class _ImportAnimatedSvgPanel(QtWidgets.QDialog):
             "auto_frames": self.auto_frames_cb.isChecked(),
             "uv_pass": self.uv_pass_cb.isChecked(),
             "normal_pass": self.normal_pass_cb.isChecked(),
+            "id_pass": self.id_pass_cb.isChecked(),
         }
 
 
@@ -197,6 +202,7 @@ class _RasterizeProgressDialog(QtWidgets.QDialog):
         "color": "Color",
         "uv": "UV",
         "normal": "Normal",
+        "id": "Object ID",
     }
 
     def __init__(self, cmd, job):
@@ -393,9 +399,27 @@ class _RasterizeProgressDialog(QtWidgets.QDialog):
             )
             normal_read["xpos"].setValue(color_read["xpos"].value() + x_offset)
             normal_read["ypos"].setValue(color_read["ypos"].value())
+            x_offset += 110
             nuke.tprint(
                 f"Created Normal pass Read node for {len(normal_frames)} frames "
                 f"({n_first}-{n_last})."
+            )
+
+        if job["want_id"]:
+            id_frames = _find_frames(out_dir, f"{base}.id")
+            if not id_frames:
+                nuke.message("Object ID pass was requested but no ID frames were found.")
+                self._cleanup()
+                return
+            id_first, id_last = id_frames[0], id_frames[-1]
+            id_read = _make_read_node(
+                job["id_pattern"], id_first, id_last, label="Object ID"
+            )
+            id_read["xpos"].setValue(color_read["xpos"].value() + x_offset)
+            id_read["ypos"].setValue(color_read["ypos"].value())
+            nuke.tprint(
+                f"Created Object ID Read node for {len(id_frames)} frames "
+                f"({id_first}-{id_last})."
             )
 
         self.status_label.setText("Done.")
@@ -413,7 +437,7 @@ def import_animated_svg():
     out_pattern = os.path.join(out_dir, f"{base}.####.png")
 
     lottie_meta = _read_lottie_metadata(src)
-    panel = _ImportAnimatedSvgPanel(nuke.root().fps() or 24.0, lottie_meta)
+    panel = _ImportAnimatedSvgPanel(nuke.root().fps() or 30.0, lottie_meta)
     if panel.exec_() != QtWidgets.QDialog.Accepted:
         return
 
@@ -425,12 +449,14 @@ def import_animated_svg():
     auto_frames = opts["auto_frames"]
     want_uv = opts["uv_pass"]
     want_normal = opts["normal_pass"]
+    want_id = opts["id_pass"]
 
     if auto_frames and lottie_meta:
         fps = str(lottie_meta["frameRate"])
 
     uv_pattern = out_pattern.replace("####", "uv.####") if want_uv else None
     normal_pattern = out_pattern.replace("####", "normal.####") if want_normal else None
+    id_pattern = out_pattern.replace("####", "id.####") if want_id else None
 
     cmd = [
         EXTERNAL_PYTHON, RASTER_SCRIPT, src,
@@ -447,6 +473,8 @@ def import_animated_svg():
         cmd.append("--uv-pass")
     if want_normal:
         cmd.append("--normal-pass")
+    if want_id:
+        cmd.append("--id-pass")
 
     job = {
         "out_dir": out_dir,
@@ -454,8 +482,10 @@ def import_animated_svg():
         "out_pattern": out_pattern,
         "uv_pattern": uv_pattern,
         "normal_pattern": normal_pattern,
+        "id_pattern": id_pattern,
         "want_uv": want_uv,
         "want_normal": want_normal,
+        "want_id": want_id,
     }
 
     dialog = _RasterizeProgressDialog(cmd, job)
