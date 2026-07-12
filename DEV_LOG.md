@@ -212,6 +212,37 @@ User asked for normal pass output. Claude acknowledged but focused on sync fix f
 
 ---
 
+## 2026-07-12 — Session 3: F-1 re-diagnosis after Nuke mismatch (Foreman)
+
+### Context
+
+- User reported F-1 still broken on **Girl cycling in autumn** (72 frames).
+- Color vs UV at frame 1 show different bike positions; time-offset cannot find a matching pose.
+
+### Findings
+
+1. 72 frames = default panel `duration=3` × `fps=24` → asset almost certainly on the **time-based SVG/HTML path**, not Lottie `totalFrames`.
+2. Chromium experiment: SMIL `<animateTransform>` does **not** appear in `document.getAnimations()`; only CSS/WAAPI does. SMIL requires `svg.pauseAnimations()` + `svg.setCurrentTime(seconds)`.
+3. With SMIL free-running, color and UV sample different wall-clock phases → poses in the UV sequence never appear in the color sequence (explains failed time-slip).
+
+### Changes
+
+- Pause/scrub SMIL clocks in addition to Lottie + CSS.
+- Two-pass capture (all color, then all UV).
+- Re-sync after UV apply; rAF settle before screenshot.
+- Lottie host uses inline `animationData` + `DOMLoaded` wait.
+
+### Testing
+
+- Synthetic SMIL+CSS hybrid: old interleaved/CSS-only path showed rider delta 7–9px during UV delay; new path delta 0.
+- Full CLI on hybrid HTML, 24 frames with `--uv-pass`: color/UV content centroid **max |dx|=0.00px**.
+
+### Notes
+
+- User must replace `~/.nuke/svg_to_frames.py` with this revision and re-import/re-render; old PNGs will still mismatch.
+
+---
+
 ## Template for future entries
 
 ```markdown

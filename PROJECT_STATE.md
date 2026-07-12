@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-07-12  
 **Repo:** https://github.com/cbrown323/SVG-to-Nuke  
-**Status:** F-1 sync fix applied. Pending validation on emoji sticker asset in Nuke.
+**Status:** F-1 sync fix hardened (SMIL clock + two-pass). Re-render required in Nuke to validate.
 
 ---
 
@@ -165,24 +165,24 @@ Test asset: **emoji sticker** Lottie with floating hearts — main body Lottie-d
 | **F-2 Scale/alpha mismatch** | Tail (and other elements) different size in color alpha vs UV alpha |
 | **F-3 Comp misalignment** | STMap comp shows UV and color out of sync on timing and scale |
 
-### Root cause (diagnosed in Claude session)
+### Root cause (diagnosed in Claude session + foreman re-diagnosis)
 
-For **Lottie** files, the rasterizer:
+Two separate clocks were left free-running:
 
-1. Scrubs only `window.lottieAnim.goToAndStop(i)` per frame.
-2. Does **not** pause or scrub secondary CSS/Web Animations layers.
-3. During UV capture (inject shader → screenshot → clear), real time passes and CSS layers (hearts) keep animating.
-4. Color screenshot locks Lottie to frame `i`; UV screenshot fires milliseconds later with CSS layers advanced → **same frame number, different pose**.
+1. **Lottie / CSS (Claude):** scrubbed only `goToAndStop(i)`; CSS/Web Animations kept advancing during UV injection.
+2. **SMIL (foreman, confirmed):** `document.getAnimations()` does **not** include SVG SMIL timelines. Without `svg.pauseAnimations()` + `svg.setCurrentTime(t)`, SMIL keeps running in wall-clock time during every screenshot and during slow UV DOM mutation.
 
-### Fix applied (2026-07-12 — foreman session)
+That produces color/UV pairs that are **not a constant frame offset** — UV samples a different phase than color — so Nuke time-slip cannot find a matching pose. Matches the "Girl cycling in autumn" report (72 frames = default 3s × 24fps → time-based / SVG path).
 
-1. **Pause all animation layers up front** (Lottie + CSS/Web Animations).
-2. **Before every screenshot** (color AND UV):
-   - Re-assert Lottie frame: `goToAndStop(i, true)`
-   - Re-assert CSS timeline: `document.getAnimations().forEach(a => a.currentTime = t_ms)`
-3. Ensures color and UV captures are atomically synchronized even when UV injection adds delay.
+### Fix applied (2026-07-12 — foreman sessions)
 
-**Status:** Implemented in `svg_to_frames.py` on branch `cursor/f-1-sync-fix-52d3`. Awaiting Nuke re-test on emoji sticker asset.
+1. Pause **Lottie + CSS/WAAPI + SMIL** up front.
+2. Before every capture, re-assert all three clocks (`goToAndStop`, `getAnimations().currentTime`, `svg.setCurrentTime`).
+3. **Two-pass** render: all color frames, then all UV frames (no interleaved UV delay between color frames).
+4. Re-sync after UV DOM mutation; double-`requestAnimationFrame` flush before screenshot.
+5. Lottie JSON embedded as `animationData` + wait on `DOMLoaded` (avoids `file://` CORS / race).
+
+**Status:** On `cursor/f-1-sync-fix-52d3`. Local SMIL hybrid test: color/UV centroid delta **0.00px**. User must copy updated `svg_to_frames.py` into `NUKE_PATH` and **re-render** the asset.
 
 ---
 
@@ -211,7 +211,7 @@ Not implemented. Possible approaches to evaluate:
 
 | Priority | ID | Area | Description | Status |
 |----------|-----|------|-------------|--------|
-| **P0** | F-1/F-2/F-3 | Sync | Apply Claude's animation sync fix — pause all layers, re-sync before each screenshot | **Applied — pending Nuke validation** |
+| **P0** | F-1/F-2/F-3 | Sync | SMIL+CSS+Lottie freeze, two-pass color/UV, re-sync after UV inject | **Hardened — re-render in Nuke to confirm** |
 | P1 | F-4 | UV | Validate sync fix resolves tail/heart misalignment on emoji sticker asset | Open (after F-1) |
 | P1 | F-5 | UV | Expand shape selector (`text`, `g`, `use`, etc.) if elements still missing | Open |
 | P2 | E-1 | AOV | Normal pass output + Nuke Read node wiring | Open |
@@ -253,8 +253,8 @@ Not implemented. Possible approaches to evaluate:
 
 **Start here:**
 
-1. ~~Apply **F-1 sync fix** to `svg_to_frames.py`~~ (done — see `cursor/f-1-sync-fix-52d3`)
-2. Re-render emoji sticker asset with UV pass; confirm timing/scale match in Nuke STMap comp.
+1. ~~Apply **F-1 sync fix** to `svg_to_frames.py`~~ (done — SMIL+CSS+Lottie, two-pass)
+2. Copy updated `svg_to_frames.py` into Nuke `NUKE_PATH` and **re-render** Girl cycling / emoji sticker with UV pass; confirm alignment.
 3. Design and implement **E-1 normal pass** if sync fix validates.
 4. Add `requirements.txt` + README.
 
