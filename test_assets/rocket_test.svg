@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <style>
+    @keyframes drift { from { transform: translate(0,0); } to { transform: translate(30px,-30px); } }
+    #rocket { animation: drift 2s linear infinite alternate; }
+  </style>
+  <g id="rocket">
+    <!-- body: filled path -->
+    <path d="M256 60 C300 120 310 220 300 300 L212 300 C202 220 212 120 256 60 Z"
+          fill="#29abe2" stroke="#1b3a4b" stroke-width="8"/>
+    <!-- window: filled circle with stroke -->
+    <circle cx="256" cy="180" r="30" fill="#ffffff" stroke="#1b3a4b" stroke-width="8"/>
+    <!-- wings: fill-none paths, stroke only -->
+    <path d="M212 240 L150 320 L212 300" fill="none" stroke="#e2574c" stroke-width="14" stroke-linejoin="round"/>
+    <path d="M300 240 L362 320 L300 300" fill="none" stroke="#e2574c" stroke-width="14" stroke-linejoin="round"/>
+    <!-- nose: filled polygon -->
+    <polygon points="236,80 276,80 256,40" fill="#e2574c"/>
+    <!-- exhaust trails: stroke-only lines and dashed path -->
+    <line x1="230" y1="320" x2="210" y2="400" stroke="#f7b32b" stroke-width="10" stroke-linecap="round"/>
+    <line x1="256" y1="320" x2="256" y2="430" stroke="#f7b32b" stroke-width="10" stroke-linecap="round"/>
+    <line x1="282" y1="320" x2="302" y2="400" stroke="#f7b32b" stroke-width="10" stroke-linecap="round"/>
+    <path d="M240 340 L232 460" fill="none" stroke="#ffffff" stroke-width="6"
+          stroke-dasharray="14 18" stroke-linecap="round"/>
+  </g>
+</svg>

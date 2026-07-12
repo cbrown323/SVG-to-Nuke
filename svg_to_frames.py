@@ -92,11 +92,37 @@ APPLY_UV_JS = """
         pattern.appendChild(image);
         defs.appendChild(pattern);
     }
-    const shapes = root.querySelectorAll('path, rect, circle, ellipse, polygon, polyline');
+    const shapes = root.querySelectorAll(
+        'path, rect, circle, ellipse, polygon, polyline, line, text, tspan, use');
     shapes.forEach(el => {
+        // Never repaint geometry that defines alpha or other paint servers
+        // (masks are luminance-based, so recoloring them changes coverage).
+        if (el.closest('clipPath, mask, pattern, marker, filter')) return;
+
+        // Mirror the element's actual rendered paints: only replace a fill
+        // that exists, only replace a stroke that exists. This keeps UV-pass
+        // pixel coverage identical to the color pass for any input.
+        const cs = window.getComputedStyle(el);
+        const hasFill = cs.fill !== 'none';
+        const hasStroke = cs.stroke !== 'none' && parseFloat(cs.strokeWidth) > 0;
+        if (!hasFill && !hasStroke) return;
+
+        // objectBoundingBox paints don't render on zero-area boxes (straight
+        // horizontal/vertical lines), so degenerate shapes get a flat mid-UV
+        // color to preserve their coverage.
+        let paint = 'url(#nukeUvPattern)';
+        try {
+            const b = el.getBBox();
+            if (!(b.width > 0) || !(b.height > 0)) paint = 'rgb(128,128,0)';
+        } catch (e) {
+            paint = 'rgb(128,128,0)';
+        }
+
         el.setAttribute('data-nuke-uv-applied', '1');
-        el.style.fill = 'url(#nukeUvPattern)';
-        el.style.stroke = 'none';
+        el.setAttribute('data-nuke-orig-fill', el.style.fill || '');
+        el.setAttribute('data-nuke-orig-stroke', el.style.stroke || '');
+        el.style.fill = hasFill ? paint : 'none';
+        el.style.stroke = hasStroke ? paint : 'none';
     });
 }
 """ % {"uv_data_uri": UV_DATA_URI}
@@ -104,8 +130,10 @@ APPLY_UV_JS = """
 CLEAR_UV_JS = """
 () => {
     document.querySelectorAll('[data-nuke-uv-applied]').forEach(el => {
-        el.style.fill = '';
-        el.style.stroke = '';
+        el.style.fill = el.getAttribute('data-nuke-orig-fill') || '';
+        el.style.stroke = el.getAttribute('data-nuke-orig-stroke') || '';
+        el.removeAttribute('data-nuke-orig-fill');
+        el.removeAttribute('data-nuke-orig-stroke');
         el.removeAttribute('data-nuke-uv-applied');
     });
 }
@@ -170,8 +198,22 @@ def rasterize(input_path: Path, out_pattern: str, fps: float, duration: float,
             print(f"Detected Lottie animation: {total_frames} frames @ {frame_rate} fps")
         else:
             total_frames = int(round(fps * duration))
-            page.evaluate("document.getAnimations().forEach(a => a.pause())")
+            frame_rate = fps
             print(f"Using manual timing: {total_frames} frames @ {fps} fps over {duration}s")
+
+        # Freeze every animation layer (CSS / Web Animations) up front so
+        # nothing advances between the color and UV screenshots of a frame.
+        page.evaluate("document.getAnimations().forEach(a => a.pause())")
+
+        def sync_frame(i):
+            """Pin ALL animation layers to frame i. Called immediately before
+            every screenshot (color AND UV) so both passes capture an
+            identical pose even though UV injection takes real time."""
+            t_ms = (i / frame_rate) * 1000
+            if info["isLottie"]:
+                page.evaluate(f"window.lottieAnim.goToAndStop({i}, true)")
+            page.evaluate(
+                f"document.getAnimations().forEach(a => {{ a.pause(); a.currentTime = {t_ms}; }})")
 
         # Compute the crop region ONCE, up front, rather than re-checking the
         # selector's stability every frame — locator().screenshot() waits for
@@ -186,26 +228,20 @@ def rasterize(input_path: Path, out_pattern: str, fps: float, duration: float,
             else:
                 print(f"Warning: selector '{selector}' not found — using full viewport instead")
 
-        for i in range(total_frames):
-            if info["isLottie"]:
-                page.evaluate(f"window.lottieAnim.goToAndStop({i}, true)")
-            else:
-                t_ms = (i / fps) * 1000
-                page.evaluate(f"document.getAnimations().forEach(a => a.currentTime = {t_ms})")
-
-            frame_path = out_pattern.replace("####", f"{i + 1:04d}")
+        def shoot(path):
             if clip_box:
-                page.screenshot(path=frame_path, clip=clip_box, omit_background=True)
+                page.screenshot(path=path, clip=clip_box, omit_background=True)
             else:
-                page.screenshot(path=frame_path, omit_background=True)
+                page.screenshot(path=path, omit_background=True)
+
+        for i in range(total_frames):
+            sync_frame(i)
+            shoot(out_pattern.replace("####", f"{i + 1:04d}"))
 
             if uv_pattern:
-                uv_frame_path = uv_pattern.replace("####", f"{i + 1:04d}")
                 page.evaluate(APPLY_UV_JS)
-                if clip_box:
-                    page.screenshot(path=uv_frame_path, clip=clip_box, omit_background=True)
-                else:
-                    page.screenshot(path=uv_frame_path, omit_background=True)
+                sync_frame(i)  # re-pin: UV injection takes real time
+                shoot(uv_pattern.replace("####", f"{i + 1:04d}"))
                 page.evaluate(CLEAR_UV_JS)
 
         browser.close()

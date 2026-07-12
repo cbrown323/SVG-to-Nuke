@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-07-12  
 **Repo:** https://github.com/cbrown323/SVG-to-Nuke  
-**Status:** Documented with full Claude chat context. Repo baseline is **pre-sync-fix** code. Foreman workflow next.
+**Status:** Sync fix (F-1/F-2/F-3) and UV coverage fix (F-5) applied and verified — UV alpha now matches color alpha pixel-for-pixel on stroke/line/fill-none test asset.
 
 ---
 
@@ -136,9 +136,10 @@ Or edit `EXTERNAL_PYTHON` in `nuke_svg_import.py`.
 When **UV Pass** is enabled:
 
 1. Color frames render normally (transparent background).
-2. Per frame, JS injects an SVG `<pattern>` (64×64 RG gradient tile) and fills each shape (`path`, `rect`, `circle`, etc.) with `url(#nukeUvPattern)`.
-3. Pattern uses `objectBoundingBox` so **R = local U, G = local V** within each shape's bounds.
-4. A second screenshot writes the UV frame; fills are cleared before the next color frame.
+2. Per frame, JS injects an SVG `<pattern>` (64×64 RG gradient tile) and repaints each rendered shape (`path`, `rect`, `circle`, `ellipse`, `polygon`, `polyline`, `line`, `text`, `tspan`, `use`) with `url(#nukeUvPattern)`.
+3. The repaint mirrors the element's computed style: fills are only replaced where a fill renders, strokes are only replaced where a stroke renders (`fill:none` stays `none`; stroke-only shapes keep stroke coverage). Geometry inside `clipPath`/`mask`/`pattern`/`marker`/`filter` is left untouched so alpha-defining shapes aren't altered. Zero-area shapes (straight lines) get a flat mid-UV color since `objectBoundingBox` patterns can't render on them.
+4. Pattern uses `objectBoundingBox` so **R = local U, G = local V** within each shape's bounds.
+5. A second screenshot writes the UV frame; original inline styles are restored before the next color frame.
 
 In Nuke: feed the UV Read into an **STMap** node's `uv` input for per-shape retexturing.
 
@@ -174,15 +175,15 @@ For **Lottie** files, the rasterizer:
 3. During UV capture (inject shader → screenshot → clear), real time passes and CSS layers (hearts) keep animating.
 4. Color screenshot locks Lottie to frame `i`; UV screenshot fires milliseconds later with CSS layers advanced → **same frame number, different pose**.
 
-**Repo baseline still has this bug.** Claude session produced a fix (+80/−56 lines) that is **not yet merged into this repo**.
+### Fix (applied to `svg_to_frames.py`, 2026-07-12)
 
-### Intended fix (from Claude session — not in repo yet)
+1. **All animation layers paused up front** (Lottie + CSS/Web Animations), for every input type.
+2. **Before every screenshot** (color AND UV), `sync_frame(i)` re-asserts:
+   - Lottie frame: `goToAndStop(i, true)`
+   - CSS timeline: `document.getAnimations().forEach(a => { a.pause(); a.currentTime = t_ms; })`
+3. Color and UV captures are now atomically synchronized even though UV injection adds delay.
 
-1. **Pause all animation layers up front** (Lottie + CSS/Web Animations).
-2. **Before every screenshot** (color AND UV):
-   - Re-assert Lottie frame: `goToAndStop(i, true)`
-   - Re-assert CSS timeline: `document.getAnimations().forEach(a => a.currentTime = t_ms)`
-3. Ensures color and UV captures are atomically synchronized even when UV injection adds delay.
+Additionally, the UV repaint now preserves pixel coverage for **any** input (fixes wing/trail alpha mismatch): strokes are repainted with the UV pattern instead of being zeroed, `fill:none` is respected, more element types are covered, and mask/clip geometry is skipped. Verified 0 mismatched alpha pixels (>8/255 tolerance) across all frames on a test asset with filled paths, stroke-only wings, stroke-only trail lines, and a dashed stroke.
 
 ---
 
@@ -211,9 +212,9 @@ Not implemented. Possible approaches to evaluate:
 
 | Priority | ID | Area | Description | Status |
 |----------|-----|------|-------------|--------|
-| **P0** | F-1/F-2/F-3 | Sync | Apply Claude's animation sync fix — pause all layers, re-sync before each screenshot | **Fix exists in Claude chat, not in repo** |
-| P1 | F-4 | UV | Validate sync fix resolves tail/heart misalignment on emoji sticker asset | Open (after F-1) |
-| P1 | F-5 | UV | Expand shape selector (`text`, `g`, `use`, etc.) if elements still missing | Open |
+| **P0** | F-1/F-2/F-3 | Sync | Animation sync fix — pause all layers, re-sync before each screenshot | **Done (2026-07-12)** |
+| P1 | F-4 | UV | Validate sync fix resolves tail/heart misalignment on emoji sticker asset | Open — needs user re-test in Nuke |
+| P1 | F-5 | UV | Stroke coverage + expanded selector (`line`, `text`, `tspan`, `use`) in UV pass | **Done (2026-07-12)** — verified pixel-exact alpha on test asset |
 | P2 | E-1 | AOV | Normal pass output + Nuke Read node wiring | Open |
 | P2 | E-4 | Repo | `requirements.txt`, install docs, sample assets | Open |
 | P3 | E-2 | UX | Panel improvements for Lottie vs non-Lottie | Open |
@@ -240,7 +241,8 @@ Not implemented. Possible approaches to evaluate:
 ### UV pass
 
 - Per-shape bounding-box UVs, not atlas UVs.
-- Strokes zeroed during UV capture.
+- Strokes carry the UV pattern of their shape's bounding box (coverage matches color pass, but stroke UVs are not arc-length parameterized).
+- Zero-area shapes (straight horizontal/vertical lines) render flat mid-UV color (R=G=0.5) instead of a gradient, since `objectBoundingBox` patterns cannot paint on degenerate boxes.
 
 ### Operational
 
@@ -253,16 +255,17 @@ Not implemented. Possible approaches to evaluate:
 
 **Start here:**
 
-1. Apply **F-1 sync fix** to `svg_to_frames.py` (see Claude session diff description in `DEV_LOG.md`).
-2. Re-render emoji sticker asset with UV pass; confirm timing/scale match in Nuke STMap comp.
-3. Design and implement **E-1 normal pass** if sync fix validates.
+1. ~~Apply **F-1 sync fix** to `svg_to_frames.py`~~ — **done 2026-07-12**, along with the F-5 UV coverage fix.
+2. Re-render emoji sticker asset with UV pass; confirm timing/scale match in Nuke STMap comp (F-4).
+3. Design and implement **E-1 normal pass**.
 4. Add `requirements.txt` + README.
 
 **Artifacts:**
 
 - `PROJECT_STATE.md` (this file)
 - `DEV_LOG.md` (full session history including Claude origin)
-- `nuke_svg_import.py`, `svg_to_frames.py` (baseline — **missing sync fix**)
+- `nuke_svg_import.py`, `svg_to_frames.py` (sync fix + UV coverage fix applied)
+- `test_assets/rocket_test.svg` + `test_assets/check_alpha.py` (alpha-parity regression test)
 
 **Claude chat reference:** https://claude.ai/share/58a60fd6-343a-458d-bb26-46514c5c6ca9
 
