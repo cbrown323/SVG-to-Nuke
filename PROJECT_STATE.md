@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-07-12  
 **Repo:** https://github.com/cbrown323/SVG-to-Nuke  
-**Status:** Sync fix (F-1/F-2/F-3) and UV coverage fix (F-5) applied and verified — UV alpha now matches color alpha pixel-for-pixel on stroke/line/fill-none test asset.
+**Status:** F-1 sync fix merged from `main` (SMIL + CSS/Lottie freeze, two-pass capture). F-5 UV coverage fix verified. Object ID pass + async progress panel on feature branch. Normal pass (E-1) abandoned.
 
 ---
 
@@ -177,11 +177,13 @@ For **Lottie** files, the rasterizer:
 
 ### Fix (applied to `svg_to_frames.py`, 2026-07-12)
 
-1. **All animation layers paused up front** (Lottie + CSS/Web Animations), for every input type.
-2. **Before every screenshot** (color AND UV), `sync_frame(i)` re-asserts:
-   - Lottie frame: `goToAndStop(i, true)`
+1. **All animation layers paused up front** (Lottie + CSS/Web Animations + SMIL via `svg.pauseAnimations()`), for every input type.
+2. **Before every screenshot** (color AND every AOV pass), `sync_to_frame(i)` re-asserts:
+   - Lottie frame: `goToAndStop(i, true)` (CSS/WAAPI inside the Lottie SVG is skipped to avoid ghost geometry)
    - CSS timeline: `document.getAnimations().forEach(a => { a.pause(); a.currentTime = t_ms; })`
-3. Color and UV captures are now atomically synchronized even though UV injection adds delay.
+   - SMIL: `svg.setCurrentTime(t_sec)` on each `<svg>`
+3. **Two-pass capture:** all color frames, then each AOV pass — no interleaved UV delay between color frames.
+4. Color and AOV captures are atomically synchronized even though DOM injection adds delay.
 
 Additionally, the UV repaint now preserves pixel coverage for **any** input (fixes wing/trail alpha mismatch): strokes are repainted with the UV pattern instead of being zeroed, `fill:none` is respected, more element types are covered, and mask/clip geometry is skipped. Verified 0 mismatched alpha pixels (>8/255 tolerance) across all frames on a test asset with filled paths, stroke-only wings, stroke-only trail lines, and a dashed stroke.
 
@@ -191,20 +193,18 @@ Additionally, the UV repaint now preserves pixel coverage for **any** input (fix
 
 | ID | Area | Description | Status |
 |----|------|-------------|--------|
-| **E-1** | AOV | **Normal pass** output (user asked: "Would it be possible to also output a normal pass?") | Open — design TBD |
+| **E-1** | AOV | Normal pass | **Cancelled** — not feasible for flat SVG art |
+| **E-7** | AOV | Object ID pass (unique RGB per fill/stroke) | **Done** |
+| **E-8** | UX | Async rasterize + progress panel (Nuke stays interactive) | **Done** |
 | E-2 | UX | Hide/disable duration/FPS panel fields when Lottie detected | Open |
 | E-3 | UX | Expose `--selector` in Nuke panel for cropped captures | Open |
 | E-4 | Repo | `requirements.txt`, README, sample test assets | Open |
 | E-5 | Lottie | Offline / vendored lottie-web (no unpkg CDN) | Open |
 | E-6 | Platform | Cross-platform `SVG_RASTER_PYTHON` defaults / docs | Open |
 
-### Normal pass (E-1) — initial notes for foreman
+### Normal pass (E-1)
 
-Not implemented. Possible approaches to evaluate:
-
-- Derive from SVG path geometry + transform stack per shape (2.5D facing-camera normals).
-- Simpler fallback: flat Z+ normal (solid blue) per shape for relighting experiments.
-- May share the same per-screenshot sync infrastructure as the UV pass fix.
+Evaluated and abandoned — flat SVG/Lottie art has no meaningful surface normals for relighting.
 
 ---
 
@@ -215,7 +215,6 @@ Not implemented. Possible approaches to evaluate:
 | **P0** | F-1/F-2/F-3 | Sync | Animation sync fix — pause all layers, re-sync before each screenshot | **Done (2026-07-12)** |
 | P1 | F-4 | UV | Validate sync fix resolves tail/heart misalignment on emoji sticker asset | Open — needs user re-test in Nuke |
 | P1 | F-5 | UV | Stroke coverage + expanded selector (`line`, `text`, `tspan`, `use`) in UV pass | **Done (2026-07-12)** — verified pixel-exact alpha on test asset |
-| P2 | E-1 | AOV | Normal pass output + Nuke Read node wiring | Open |
 | P2 | E-4 | Repo | `requirements.txt`, install docs, sample assets | Open |
 | P3 | E-2 | UX | Panel improvements for Lottie vs non-Lottie | Open |
 
@@ -255,10 +254,9 @@ Not implemented. Possible approaches to evaluate:
 
 **Start here:**
 
-1. ~~Apply **F-1 sync fix** to `svg_to_frames.py`~~ — **done 2026-07-12**, along with the F-5 UV coverage fix.
+1. ~~Apply **F-1 sync fix** to `svg_to_frames.py`~~ — **done 2026-07-12**, merged from `main` + F-5 UV coverage fix.
 2. Re-render emoji sticker asset with UV pass; confirm timing/scale match in Nuke STMap comp (F-4).
-3. Design and implement **E-1 normal pass**.
-4. Add `requirements.txt` + README.
+3. Add `requirements.txt` + README.
 
 **Artifacts:**
 
@@ -276,7 +274,7 @@ Not implemented. Possible approaches to evaluate:
 ```
 SVG-to-Nuke/
 ├── nuke_svg_import.py    # Nuke menu + subprocess + Read nodes
-├── svg_to_frames.py      # Playwright rasterizer CLI (pre-sync-fix baseline)
+├── svg_to_frames.py      # Playwright rasterizer CLI (F-1 sync + UV/ID AOV passes)
 ├── PROJECT_STATE.md      # This file
 ├── DEV_LOG.md            # Development log
 └── README.md             # Repo title (minimal)

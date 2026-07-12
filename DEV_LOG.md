@@ -182,11 +182,30 @@ User asked for normal pass output. Claude acknowledged but focused on sync fix f
 
 - [x] Import confirmed fix list from Claude chat
 - [x] Prioritize backlog in `PROJECT_STATE.md`
-- [ ] Apply F-1 sync fix to `svg_to_frames.py`
+- [x] Apply F-1 sync fix to `svg_to_frames.py`
 - [ ] Re-test emoji sticker UV + color alignment in Nuke
-- [ ] Design E-1 normal pass
+- [x] Object ID pass (E-7)
+- [x] Async progress panel (E-8)
+- [x] Normal pass (E-1) — evaluated and abandoned
 - [ ] Add `requirements.txt` and expanded README
 - [ ] CLI smoke test with sample `.json` (hybrid Lottie+CSS if available)
+
+---
+
+## 2026-07-12 — Session 2: F-1 sync fix (merged to `main`)
+
+- Pause Lottie + CSS/WAAPI + SMIL at rasterize start.
+- `sync_to_frame()` before every color and UV screenshot.
+- Two-pass capture (all color, then all UV).
+- Re-sync after UV DOM mutation; double-rAF settle before screenshot.
+- Lottie host uses inline `animationData` + `DOMLoaded` wait.
+
+---
+
+## 2026-07-12 — Session 3: F-1 SMIL re-diagnosis (merged to `main`)
+
+- SMIL `<animateTransform>` not covered by `document.getAnimations()` — requires `svg.pauseAnimations()` + `svg.setCurrentTime()`.
+- Synthetic SMIL+CSS hybrid test: new path color/UV centroid delta **0.00px**.
 
 ---
 

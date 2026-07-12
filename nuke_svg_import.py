@@ -141,9 +141,6 @@ class _ImportAnimatedSvgPanel(QtWidgets.QDialog):
             self.meta_label.setStyleSheet("color: #8af;")
 
         self.uv_pass_cb = QtWidgets.QCheckBox("UV Pass (for retexturing with STMap)")
-        self.normal_pass_cb = QtWidgets.QCheckBox(
-            "Normal Pass (flat Z+ per shape, for relighting)"
-        )
         self.id_pass_cb = QtWidgets.QCheckBox(
             "Object ID Pass (unique RGB per fill/stroke for mattes)"
         )
@@ -155,7 +152,6 @@ class _ImportAnimatedSvgPanel(QtWidgets.QDialog):
         if lottie_meta:
             layout.addRow("", self.meta_label)
         layout.addRow("", self.uv_pass_cb)
-        layout.addRow("", self.normal_pass_cb)
         layout.addRow("", self.id_pass_cb)
 
         buttons = QtWidgets.QDialogButtonBox(
@@ -190,7 +186,6 @@ class _ImportAnimatedSvgPanel(QtWidgets.QDialog):
             "fps": self.fps_edit.text(),
             "auto_frames": self.auto_frames_cb.isChecked(),
             "uv_pass": self.uv_pass_cb.isChecked(),
-            "normal_pass": self.normal_pass_cb.isChecked(),
             "id_pass": self.id_pass_cb.isChecked(),
         }
 
@@ -201,7 +196,6 @@ class _RasterizeProgressDialog(QtWidgets.QDialog):
     _PASS_LABELS = {
         "color": "Color",
         "uv": "UV",
-        "normal": "Normal",
         "id": "Object ID",
     }
 
@@ -387,24 +381,6 @@ class _RasterizeProgressDialog(QtWidgets.QDialog):
                 f"({uv_first}-{uv_last})."
             )
 
-        if job["want_normal"]:
-            normal_frames = _find_frames(out_dir, f"{base}.normal")
-            if not normal_frames:
-                nuke.message("Normal pass was requested but no normal frames were found.")
-                self._cleanup()
-                return
-            n_first, n_last = normal_frames[0], normal_frames[-1]
-            normal_read = _make_read_node(
-                job["normal_pattern"], n_first, n_last, label="Normal Pass"
-            )
-            normal_read["xpos"].setValue(color_read["xpos"].value() + x_offset)
-            normal_read["ypos"].setValue(color_read["ypos"].value())
-            x_offset += 110
-            nuke.tprint(
-                f"Created Normal pass Read node for {len(normal_frames)} frames "
-                f"({n_first}-{n_last})."
-            )
-
         if job["want_id"]:
             id_frames = _find_frames(out_dir, f"{base}.id")
             if not id_frames:
@@ -448,14 +424,12 @@ def import_animated_svg():
     fps = opts["fps"]
     auto_frames = opts["auto_frames"]
     want_uv = opts["uv_pass"]
-    want_normal = opts["normal_pass"]
     want_id = opts["id_pass"]
 
     if auto_frames and lottie_meta:
         fps = str(lottie_meta["frameRate"])
 
     uv_pattern = out_pattern.replace("####", "uv.####") if want_uv else None
-    normal_pattern = out_pattern.replace("####", "normal.####") if want_normal else None
     id_pattern = out_pattern.replace("####", "id.####") if want_id else None
 
     cmd = [
@@ -471,8 +445,6 @@ def import_animated_svg():
         cmd.extend(["--frames", frames])
     if want_uv:
         cmd.append("--uv-pass")
-    if want_normal:
-        cmd.append("--normal-pass")
     if want_id:
         cmd.append("--id-pass")
 
@@ -481,10 +453,8 @@ def import_animated_svg():
         "base": base,
         "out_pattern": out_pattern,
         "uv_pattern": uv_pattern,
-        "normal_pattern": normal_pattern,
         "id_pattern": id_pattern,
         "want_uv": want_uv,
-        "want_normal": want_normal,
         "want_id": want_id,
     }
 
