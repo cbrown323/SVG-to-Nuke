@@ -11,7 +11,7 @@ Handles three input types automatically, based on file extension:
   .html  A page that already sets up the animation (e.g. a hand-built
          host page). Exposes `window.lottieAnim` if you want
          frame-accurate scrubbing; otherwise falls back to time-based
-         scrubbing via the Web Animations API.
+         scrubbing via the Web Animations API + SVG SMIL clock.
   .json  Assumed to be a Lottie/Bodymovin export. A temporary host page
          is generated that loads lottie-web from a CDN and plays it,
          then frames are scrubbed by exact frame number (not time), and
@@ -25,9 +25,12 @@ Requires:
 Examples:
     python svg_to_frames.py animation.json --out renders/anim.####.png
     python svg_to_frames.py animation.svg  --out renders/anim.####.png \\
-        --fps 24 --duration 3
+        --fps 24 --auto-frames
+    python svg_to_frames.py animation.svg  --out renders/anim.####.png \\
+        --fps 24 --frames 72
 """
 import argparse
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -36,6 +39,8 @@ from playwright.sync_api import sync_playwright
 
 LOTTIE_CDN = "https://unpkg.com/lottie-web@5.12.2/build/player/lottie.min.js"
 
+# Embed animation JSON as animationData so we avoid file:// CORS failures and
+# can wait on DOMLoaded before scrubbing.
 LOTTIE_HOST_TEMPLATE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>html,body{{margin:0;background:transparent;}}
@@ -49,7 +54,14 @@ LOTTIE_HOST_TEMPLATE = """<!DOCTYPE html>
     renderer: 'svg',
     loop: false,
     autoplay: false,
-    path: {json_path!r}
+    animationData: {animation_data}
+  }});
+  window.__lottieReady = new Promise((resolve) => {{
+    if (window.lottieAnim.isLoaded) {{
+      resolve();
+    }} else {{
+      window.lottieAnim.addEventListener('DOMLoaded', () => resolve());
+    }}
   }});
 </script>
 </body></html>
@@ -65,6 +77,21 @@ UV_DATA_URI = (
     "K0ArQCtAK0ArQCtAeyCgo94qQCtAK0ArQCtAK0ArQCtAK0B7IODyo/4Hw5wC/B8uFWoAAAAA"
     "SUVORK5CYII="
 )
+
+# Freeze every timeline we know about. SMIL is NOT covered by
+# document.getAnimations() — those clocks keep running unless we call
+# pauseAnimations() on each <svg>.
+PAUSE_ALL_JS = """
+() => {
+    if (window.lottieAnim) {
+        window.lottieAnim.pause();
+    }
+    document.getAnimations({subtree: true}).forEach(a => a.pause());
+    document.querySelectorAll('svg').forEach(svg => {
+        try { svg.pauseAnimations(); } catch (e) {}
+    });
+}
+"""
 
 APPLY_UV_JS = """
 () => {
@@ -139,26 +166,167 @@ CLEAR_UV_JS = """
 }
 """
 
+# Probe one animation loop cycle for SVG/SMIL/CSS assets (ignores repeat/infinite).
+DETECT_LOOP_DURATION_JS = """
+() => {
+    function parseSmilTime(value) {
+        if (!value || value === 'indefinite' || value === 'media') return null;
+        const v = String(value).trim();
+        if (v.endsWith('ms')) return parseFloat(v) / 1000;
+        if (v.endsWith('min')) return parseFloat(v) * 60;
+        if (v.endsWith('h')) return parseFloat(v) * 3600;
+        if (v.endsWith('s')) return parseFloat(v);
+        const n = parseFloat(v);
+        return Number.isFinite(n) ? n : null;
+    }
+
+    let maxSec = 0;
+
+    document.getAnimations({ subtree: true }).forEach(a => {
+        if (!a.effect || !a.effect.getComputedTiming) return;
+        const t = a.effect.getComputedTiming();
+        if (!Number.isFinite(t.duration) || t.duration === Infinity) return;
+        const end = ((t.delay || 0) + t.duration + (t.endDelay || 0)) / 1000;
+        if (end > maxSec) maxSec = end;
+    });
+
+    document.querySelectorAll('animate, animateTransform, animateMotion, set').forEach(el => {
+        const begin = parseSmilTime(el.getAttribute('begin')) || 0;
+        const dur = parseSmilTime(el.getAttribute('dur'));
+        if (dur != null) maxSec = Math.max(maxSec, begin + dur);
+        const end = parseSmilTime(el.getAttribute('end'));
+        if (end != null) maxSec = Math.max(maxSec, end);
+    });
+
+    return { cycleSeconds: maxSec };
+}
+"""
+
+
+def sanitize_lottie_parent_outpoints(animation_data: dict) -> dict:
+    """Clamp layers that outlive their parent.
+
+    lottie-web keeps parented children painting after the parent layer's out-point,
+    often as degenerate sub-pixel geometry (shoe-colored 'ghost' lines through the
+    character). LottieFiles site playback does not show that debris. Matching the
+    child's ``op`` to the parent's removes it without touching UV sync.
+    """
+    def clamp_layers(layers):
+        by_ind = {
+            layer["ind"]: layer
+            for layer in layers
+            if isinstance(layer, dict) and "ind" in layer
+        }
+        for layer in layers:
+            if not isinstance(layer, dict):
+                continue
+            parent_id = layer.get("parent")
+            if parent_id is None:
+                continue
+            parent = by_ind.get(parent_id)
+            if not parent:
+                continue
+            parent_op = parent.get("op")
+            layer_op = layer.get("op")
+            if parent_op is None or layer_op is None:
+                continue
+            if layer_op > parent_op:
+                layer["op"] = parent_op
+
+    if isinstance(animation_data.get("layers"), list):
+        clamp_layers(animation_data["layers"])
+    for asset in animation_data.get("assets") or []:
+        if isinstance(asset, dict) and isinstance(asset.get("layers"), list):
+            clamp_layers(asset["layers"])
+    return animation_data
+
 
 def make_lottie_host(json_path: Path, width: int, height: int) -> Path:
+    animation_data = json.loads(json_path.read_text(encoding="utf-8"))
+    if isinstance(animation_data, dict):
+        sanitize_lottie_parent_outpoints(animation_data)
     html = LOTTIE_HOST_TEMPLATE.format(
         cdn=LOTTIE_CDN, width=width, height=height,
-        json_path=f"file://{json_path.resolve()}",
+        animation_data=json.dumps(animation_data),
     )
     tmp = Path(tempfile.mkstemp(suffix=".html")[1])
     tmp.write_text(html, encoding="utf-8")
     return tmp
 
 
-def rasterize(input_path: Path, out_pattern: str, fps: float, duration: float,
-              width: int, height: int, selector: str, uv_pattern: str = None):
+def read_lottie_metadata(json_path: Path):
+    """Read native fr / frame count from a Lottie JSON without starting a browser."""
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or "fr" not in data or "op" not in data:
+        return None
+    fr = float(data.get("fr") or 0)
+    ip = float(data.get("ip") or 0)
+    op = float(data.get("op") or 0)
+    if fr <= 0 or op <= ip:
+        return None
+    return {
+        "frameRate": fr,
+        "ip": ip,
+        "op": op,
+        "totalFrames": int(round(op - ip)),
+    }
+
+
+def _sync_js(is_lottie: bool, frame_index: int, frame_rate: float) -> str:
+    """Re-assert timelines for one frame.
+
+    Lottie: frame-accurate goToAndStop only, plus CSS/WAAPI outside the Lottie
+    SVG (hybrid overlays). Do NOT drive svg.setCurrentTime on Lottie's SVG —
+    that time-scrubs overlapping AE layers and ghosts limbs past segment joins.
+
+    Non-Lottie: CSS/WAAPI + SMIL clocks.
+    """
+    t_ms = (frame_index / frame_rate) * 1000.0
+    t_sec = t_ms / 1000.0
+    if is_lottie:
+        return f"""
+() => {{
+    if (window.lottieAnim) {{
+        window.lottieAnim.goToAndStop({frame_index}, true);
+    }}
+    document.getAnimations({{subtree: true}}).forEach(a => {{
+        const target = a.effect && a.effect.target;
+        if (target && target.closest && target.closest('#anim svg')) {{
+            return;
+        }}
+        a.pause();
+        a.currentTime = {t_ms};
+    }});
+}}
+"""
+    return f"""
+() => {{
+    document.getAnimations({{subtree: true}}).forEach(a => {{
+        a.pause();
+        a.currentTime = {t_ms};
+    }});
+    document.querySelectorAll('svg').forEach(svg => {{
+        try {{
+            svg.pauseAnimations();
+            svg.setCurrentTime({t_sec});
+        }} catch (e) {{}}
+    }});
+}}
+"""
+
+
+def rasterize(input_path: Path, out_pattern: str, fps: float, frame_count: int,
+              auto_frames: bool, width: int, height: int, selector: str,
+              uv_pattern: str = None):
     out_dir = Path(out_pattern).parent
     out_dir.mkdir(parents=True, exist_ok=True)
     if uv_pattern:
         Path(uv_pattern).parent.mkdir(parents=True, exist_ok=True)
 
     cleanup = None
+    file_meta = None
     if input_path.suffix.lower() == ".json":
+        file_meta = read_lottie_metadata(input_path)
         target = cleanup = make_lottie_host(input_path, width, height)
     else:
         target = input_path
@@ -172,6 +340,15 @@ def rasterize(input_path: Path, out_pattern: str, fps: float, duration: float,
 
         page.goto(f"file://{target.resolve()}")
         page.wait_for_timeout(300)  # let JS / lottie-web finish initializing
+
+        # If this is a Lottie host, wait until the SVG DOM is actually built.
+        page.evaluate("""
+            async () => {
+                if (window.__lottieReady) {
+                    await window.__lottieReady;
+                }
+            }
+        """)
 
         # Debug snapshot so you can see exactly what rendered, no matter
         # what the selector logic below does.
@@ -192,28 +369,45 @@ def rasterize(input_path: Path, out_pattern: str, fps: float, duration: float,
             }
         """)
 
-        if info["isLottie"]:
-            total_frames = int(round(info["totalFrames"]))
-            frame_rate = info["frameRate"] or fps
-            print(f"Detected Lottie animation: {total_frames} frames @ {frame_rate} fps")
+        # .json inputs always use on-disk Lottie timing when metadata is valid,
+        # even if the browser player failed to report totals.
+        if info["isLottie"] or file_meta:
+            frame_rate = float(
+                (file_meta or {}).get("frameRate")
+                or info.get("frameRate")
+                or fps
+            )
+            native_frames = int(
+                (file_meta or {}).get("totalFrames")
+                or round(info.get("totalFrames") or 0)
+                or 0
+            )
+            if auto_frames:
+                total_frames = max(1, native_frames)
+                print(f"Auto-detected Lottie loop: {total_frames} frames @ {frame_rate} fps "
+                      f"(native — not conformed to panel FPS)")
+            else:
+                total_frames = max(1, int(frame_count))
+                print(f"Using {total_frames} frames @ {frame_rate} fps (Lottie native rate)")
+            info["isLottie"] = True
         else:
-            total_frames = int(round(fps * duration))
-            frame_rate = fps
-            print(f"Using manual timing: {total_frames} frames @ {fps} fps over {duration}s")
+            frame_rate = float(fps)
+            if auto_frames:
+                cycle = page.evaluate(DETECT_LOOP_DURATION_JS)
+                cycle_sec = float(cycle.get("cycleSeconds") or 0)
+                if cycle_sec > 0:
+                    total_frames = max(1, int(round(cycle_sec * frame_rate)))
+                    print(f"Auto-detected loop: {cycle_sec:.3f}s -> {total_frames} frames @ {frame_rate} fps")
+                else:
+                    total_frames = max(1, int(frame_count))
+                    print(f"Warning: could not detect loop duration — using {total_frames} frames @ {frame_rate} fps")
+            else:
+                total_frames = max(1, int(frame_count))
+                print(f"Using {total_frames} frames @ {frame_rate} fps")
 
-        # Freeze every animation layer (CSS / Web Animations) up front so
-        # nothing advances between the color and UV screenshots of a frame.
-        page.evaluate("document.getAnimations().forEach(a => a.pause())")
-
-        def sync_frame(i):
-            """Pin ALL animation layers to frame i. Called immediately before
-            every screenshot (color AND UV) so both passes capture an
-            identical pose even though UV injection takes real time."""
-            t_ms = (i / frame_rate) * 1000
-            if info["isLottie"]:
-                page.evaluate(f"window.lottieAnim.goToAndStop({i}, true)")
-            page.evaluate(
-                f"document.getAnimations().forEach(a => {{ a.pause(); a.currentTime = {t_ms}; }})")
+        # Pause every animation layer up front so nothing drifts in real time
+        # while we inject UV shaders or take a second screenshot.
+        page.evaluate(PAUSE_ALL_JS)
 
         # Compute the crop region ONCE, up front, rather than re-checking the
         # selector's stability every frame — locator().screenshot() waits for
@@ -228,20 +422,36 @@ def rasterize(input_path: Path, out_pattern: str, fps: float, duration: float,
             else:
                 print(f"Warning: selector '{selector}' not found — using full viewport instead")
 
-        def shoot(path):
+        def sync_to_frame(frame_index: int):
+            page.evaluate(_sync_js(info["isLottie"], frame_index, frame_rate))
+            # Double-rAF so layout/paint settle on the scrubbed pose before capture.
+            page.evaluate("""
+                () => new Promise(resolve => {
+                    requestAnimationFrame(() => requestAnimationFrame(resolve));
+                })
+            """)
+
+        def grab(path: str):
             if clip_box:
                 page.screenshot(path=path, clip=clip_box, omit_background=True)
             else:
                 page.screenshot(path=path, omit_background=True)
 
+        # Two-pass capture: finish every color frame first, then every UV frame.
+        # Interleaving color→UV→color let wall-clock SMIL/CSS clocks (and slow
+        # UV DOM mutation) sample different poses under the same frame index.
         for i in range(total_frames):
-            sync_frame(i)
-            shoot(out_pattern.replace("####", f"{i + 1:04d}"))
+            sync_to_frame(i)
+            grab(out_pattern.replace("####", f"{i + 1:04d}"))
 
-            if uv_pattern:
+        if uv_pattern:
+            for i in range(total_frames):
+                sync_to_frame(i)
                 page.evaluate(APPLY_UV_JS)
-                sync_frame(i)  # re-pin: UV injection takes real time
-                shoot(uv_pattern.replace("####", f"{i + 1:04d}"))
+                # Re-assert pose after DOM mutation; style.fill overrides Lottie
+                # presentation attributes, so UV fills survive goToAndStop.
+                sync_to_frame(i)
+                grab(uv_pattern.replace("####", f"{i + 1:04d}"))
                 page.evaluate(CLEAR_UV_JS)
 
         browser.close()
@@ -263,9 +473,11 @@ def main():
     ap.add_argument("--out", default="frames/anim.####.png",
                      help="Output pattern using #### for the frame number")
     ap.add_argument("--fps", type=float, default=24,
-                     help="Frame rate for time-based scrubbing (ignored for detected Lottie files)")
-    ap.add_argument("--duration", type=float, default=3,
-                     help="Duration in seconds for time-based scrubbing")
+                     help="Frame rate for time-based scrubbing and auto frame math")
+    ap.add_argument("--frames", type=int, default=72,
+                     help="Frame count when --auto-frames is not set (ignored with --auto-frames)")
+    ap.add_argument("--auto-frames", action="store_true",
+                     help="Detect frame count from the animation (Lottie totalFrames or one loop cycle)")
     ap.add_argument("--width", type=int, default=1920)
     ap.add_argument("--height", type=int, default=1080)
     ap.add_argument("--selector", default="body",
@@ -284,7 +496,7 @@ def main():
     if args.uv_pass:
         uv_pattern = args.uv_out or args.out.replace("####", "uv.####")
 
-    rasterize(args.input, args.out, args.fps, args.duration,
+    rasterize(args.input, args.out, args.fps, args.frames, args.auto_frames,
               args.width, args.height, args.selector, uv_pattern)
 
 
