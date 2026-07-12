@@ -29,6 +29,11 @@ import subprocess
 
 import nuke
 
+try:
+    from PySide2 import QtWidgets
+except ImportError:
+    from PySide6 import QtWidgets
+
 EXTERNAL_PYTHON = os.environ.get(
     "SVG_RASTER_PYTHON",
     r"C:\Users\CBWorkflow\AppData\Local\Microsoft\WindowsApps\python.exe",
@@ -62,6 +67,62 @@ def _make_read_node(pattern, first, last, label=None):
     return read
 
 
+class _ImportAnimatedSvgPanel(QtWidgets.QDialog):
+    """Import panel with frame count + Auto toggle (Auto disables manual frames)."""
+
+    def __init__(self, default_fps):
+        parent = nuke.mainWindow() if hasattr(nuke, "mainWindow") else None
+        super().__init__(parent)
+        self.setWindowTitle("Import Animated SVG")
+        self.setMinimumWidth(420)
+
+        layout = QtWidgets.QFormLayout(self)
+
+        self.width_edit = QtWidgets.QLineEdit("1920")
+        self.height_edit = QtWidgets.QLineEdit("1080")
+        self.fps_edit = QtWidgets.QLineEdit(str(default_fps))
+
+        frames_row = QtWidgets.QWidget()
+        frames_layout = QtWidgets.QHBoxLayout(frames_row)
+        frames_layout.setContentsMargins(0, 0, 0, 0)
+        self.frames_edit = QtWidgets.QLineEdit("72")
+        self.auto_frames_cb = QtWidgets.QCheckBox("Auto")
+        self.auto_frames_cb.setChecked(True)
+        frames_layout.addWidget(self.frames_edit)
+        frames_layout.addWidget(self.auto_frames_cb)
+
+        self.uv_pass_cb = QtWidgets.QCheckBox("UV Pass (for retexturing with STMap)")
+
+        layout.addRow("Width", self.width_edit)
+        layout.addRow("Height", self.height_edit)
+        layout.addRow("Frames", frames_row)
+        layout.addRow("FPS", self.fps_edit)
+        layout.addRow("", self.uv_pass_cb)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+        self.auto_frames_cb.toggled.connect(self._on_auto_toggled)
+        self._on_auto_toggled(self.auto_frames_cb.isChecked())
+
+    def _on_auto_toggled(self, checked):
+        self.frames_edit.setEnabled(not checked)
+
+    def values(self):
+        return {
+            "width": self.width_edit.text(),
+            "height": self.height_edit.text(),
+            "frames": self.frames_edit.text(),
+            "fps": self.fps_edit.text(),
+            "auto_frames": self.auto_frames_cb.isChecked(),
+            "uv_pass": self.uv_pass_cb.isChecked(),
+        }
+
+
 def import_animated_svg():
     src = nuke.getFilename("Select animated SVG / Lottie JSON / HTML", "*.svg *.json *.html")
     if not src:
@@ -71,21 +132,17 @@ def import_animated_svg():
     out_dir = os.path.join(os.path.dirname(src), f"{base}_frames")
     out_pattern = os.path.join(out_dir, f"{base}.####.png")
 
-    panel = nuke.Panel("Import Animated SVG")
-    panel.setWidth(400)
-    panel.addSingleLineInput("Width", "1920")
-    panel.addSingleLineInput("Height", "1080")
-    panel.addSingleLineInput("Duration (s, ignored for Lottie)", "3")
-    panel.addSingleLineInput("FPS (ignored for Lottie)", str(nuke.root().fps() or 24.0))
-    panel.addBooleanCheckBox("UV Pass (for retexturing with STMap)", False)
-    if not panel.show():
+    panel = _ImportAnimatedSvgPanel(nuke.root().fps() or 24.0)
+    if panel.exec_() != QtWidgets.QDialog.Accepted:
         return
 
-    width = panel.value("Width")
-    height = panel.value("Height")
-    duration = panel.value("Duration (s, ignored for Lottie)")
-    fps = panel.value("FPS (ignored for Lottie)")
-    want_uv = panel.value("UV Pass (for retexturing with STMap)")
+    opts = panel.values()
+    width = opts["width"]
+    height = opts["height"]
+    frames = opts["frames"]
+    fps = opts["fps"]
+    auto_frames = opts["auto_frames"]
+    want_uv = opts["uv_pass"]
 
     uv_pattern = out_pattern.replace("####", "uv.####") if want_uv else None
 
@@ -93,10 +150,13 @@ def import_animated_svg():
         EXTERNAL_PYTHON, RASTER_SCRIPT, src,
         "--out", out_pattern,
         "--fps", fps,
-        "--duration", duration,
         "--width", width,
         "--height", height,
     ]
+    if auto_frames:
+        cmd.append("--auto-frames")
+    else:
+        cmd.extend(["--frames", frames])
     if want_uv:
         cmd.append("--uv-pass")
 

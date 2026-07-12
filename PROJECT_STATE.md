@@ -41,7 +41,7 @@ Fidelity is bounded by headless Chromium. True vector resolution-independence is
 │       │                                                         │
 │       ▼                                                         │
 │  nuke_svg_import.py                                             │
-│    • File picker + parameter panel (W/H, duration, fps, UV)     │
+│    • File picker + parameter panel (W/H, frames, fps, UV)     │
 │    • subprocess → external Python                               │
 │    • Creates Read node(s) for color (+ UV if requested)         │
 └──────────────────────────┬──────────────────────────────────────┘
@@ -191,7 +191,7 @@ That produces color/UV pairs that are **not a constant frame offset** — UV sam
 | ID | Area | Description | Status |
 |----|------|-------------|--------|
 | **E-1** | AOV | **Normal pass** output (user asked: "Would it be possible to also output a normal pass?") | Open — design TBD |
-| E-2 | UX | Hide/disable duration/FPS panel fields when Lottie detected | Open |
+| E-2 | UX | ~~Hide/disable duration/FPS panel fields when Lottie detected~~ → frame count + Auto checkbox | **Done** |
 | E-3 | UX | Expose `--selector` in Nuke panel for cropped captures | Open |
 | E-4 | Repo | `requirements.txt`, README, sample test assets | Open |
 | E-5 | Lottie | Offline / vendored lottie-web (no unpkg CDN) | Open |
@@ -236,6 +236,12 @@ Not implemented. Possible approaches to evaluate:
 
 - Non-Lottie scrubbing uses Web Animations API only — `requestAnimationFrame`-only animations may not scrub.
 - Duration/FPS ignored for Lottie (panel still shows them).
+
+### Frame count
+
+- Nuke panel asks for **Frames** (not seconds) with an **Auto** checkbox (default on).
+- Auto: Lottie uses `totalFrames`; SVG/SMIL/CSS probes one loop cycle × FPS.
+- Manual: user enters frame count; field disabled when Auto is checked.
 
 ### UV pass
 

@@ -243,6 +243,34 @@ User asked for normal pass output. Claude acknowledged but focused on sync fix f
 
 ---
 
+---
+
+## 2026-07-12 — Session 4: Frame count panel + Auto detection (Foreman)
+
+### Context
+
+- User confirmed UV pass alignment is fixed — do not change sync/UV capture code.
+- Request: replace duration-in-seconds with frame count; add **Auto** checkbox that disables manual frame entry and detects loop length from the asset.
+
+### Changes
+
+1. **`nuke_svg_import.py`**
+   - Qt dialog: **Frames** field + **Auto** checkbox (default on).
+   - Auto checked → Frames input disabled.
+   - Passes `--auto-frames` or `--frames N` to rasterizer.
+
+2. **`svg_to_frames.py`** (frame logic only — UV/sync untouched)
+   - Replaced `--duration` with `--frames` / `--auto-frames`.
+   - Auto: Lottie `totalFrames`; SVG/SMIL/CSS probes one loop cycle via `DETECT_LOOP_DURATION_JS`.
+   - Manual: user-supplied frame count.
+
+### Testing
+
+- SMIL+CSS hybrid with `--auto-frames`: detected 3.000s → 72 frames @ 24fps.
+- Manual `--frames 48`: wrote 48 frames.
+
+---
+
 ## Template for future entries
 
 ```markdown

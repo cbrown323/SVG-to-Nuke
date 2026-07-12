@@ -25,7 +25,9 @@ Requires:
 Examples:
     python svg_to_frames.py animation.json --out renders/anim.####.png
     python svg_to_frames.py animation.svg  --out renders/anim.####.png \\
-        --fps 24 --duration 3
+        --fps 24 --auto-frames
+    python svg_to_frames.py animation.svg  --out renders/anim.####.png \\
+        --fps 24 --frames 72
 """
 import argparse
 import json
@@ -136,6 +138,42 @@ CLEAR_UV_JS = """
 }
 """
 
+# Probe one animation loop cycle for SVG/SMIL/CSS assets (ignores repeat/infinite).
+DETECT_LOOP_DURATION_JS = """
+() => {
+    function parseSmilTime(value) {
+        if (!value || value === 'indefinite' || value === 'media') return null;
+        const v = String(value).trim();
+        if (v.endsWith('ms')) return parseFloat(v) / 1000;
+        if (v.endsWith('min')) return parseFloat(v) * 60;
+        if (v.endsWith('h')) return parseFloat(v) * 3600;
+        if (v.endsWith('s')) return parseFloat(v);
+        const n = parseFloat(v);
+        return Number.isFinite(n) ? n : null;
+    }
+
+    let maxSec = 0;
+
+    document.getAnimations({ subtree: true }).forEach(a => {
+        if (!a.effect || !a.effect.getComputedTiming) return;
+        const t = a.effect.getComputedTiming();
+        if (!Number.isFinite(t.duration) || t.duration === Infinity) return;
+        const end = ((t.delay || 0) + t.duration + (t.endDelay || 0)) / 1000;
+        if (end > maxSec) maxSec = end;
+    });
+
+    document.querySelectorAll('animate, animateTransform, animateMotion, set').forEach(el => {
+        const begin = parseSmilTime(el.getAttribute('begin')) || 0;
+        const dur = parseSmilTime(el.getAttribute('dur'));
+        if (dur != null) maxSec = Math.max(maxSec, begin + dur);
+        const end = parseSmilTime(el.getAttribute('end'));
+        if (end != null) maxSec = Math.max(maxSec, end);
+    });
+
+    return { cycleSeconds: maxSec };
+}
+"""
+
 
 def make_lottie_host(json_path: Path, width: int, height: int) -> Path:
     animation_data = json.loads(json_path.read_text(encoding="utf-8"))
@@ -174,8 +212,9 @@ def _sync_js(is_lottie: bool, frame_index: int, frame_rate: float) -> str:
 """
 
 
-def rasterize(input_path: Path, out_pattern: str, fps: float, duration: float,
-              width: int, height: int, selector: str, uv_pattern: str = None):
+def rasterize(input_path: Path, out_pattern: str, fps: float, frame_count: int,
+              auto_frames: bool, width: int, height: int, selector: str,
+              uv_pattern: str = None):
     out_dir = Path(out_pattern).parent
     out_dir.mkdir(parents=True, exist_ok=True)
     if uv_pattern:
@@ -226,13 +265,27 @@ def rasterize(input_path: Path, out_pattern: str, fps: float, duration: float,
         """)
 
         if info["isLottie"]:
-            total_frames = int(round(info["totalFrames"]))
             frame_rate = float(info["frameRate"] or fps)
-            print(f"Detected Lottie animation: {total_frames} frames @ {frame_rate} fps")
+            if auto_frames:
+                total_frames = int(round(info["totalFrames"]))
+                print(f"Auto-detected Lottie loop: {total_frames} frames @ {frame_rate} fps")
+            else:
+                total_frames = max(1, int(frame_count))
+                print(f"Using {total_frames} frames @ {frame_rate} fps (Lottie)")
         else:
-            total_frames = int(round(fps * duration))
             frame_rate = float(fps)
-            print(f"Using manual timing: {total_frames} frames @ {fps} fps over {duration}s")
+            if auto_frames:
+                cycle = page.evaluate(DETECT_LOOP_DURATION_JS)
+                cycle_sec = float(cycle.get("cycleSeconds") or 0)
+                if cycle_sec > 0:
+                    total_frames = max(1, int(round(cycle_sec * frame_rate)))
+                    print(f"Auto-detected loop: {cycle_sec:.3f}s -> {total_frames} frames @ {frame_rate} fps")
+                else:
+                    total_frames = max(1, int(frame_count))
+                    print(f"Warning: could not detect loop duration — using {total_frames} frames @ {frame_rate} fps")
+            else:
+                total_frames = max(1, int(frame_count))
+                print(f"Using {total_frames} frames @ {frame_rate} fps")
 
         # Pause every animation layer up front so nothing drifts in real time
         # while we inject UV shaders or take a second screenshot.
@@ -302,9 +355,11 @@ def main():
     ap.add_argument("--out", default="frames/anim.####.png",
                      help="Output pattern using #### for the frame number")
     ap.add_argument("--fps", type=float, default=24,
-                     help="Frame rate for time-based scrubbing (ignored for detected Lottie files)")
-    ap.add_argument("--duration", type=float, default=3,
-                     help="Duration in seconds for time-based scrubbing")
+                     help="Frame rate for time-based scrubbing and auto frame math")
+    ap.add_argument("--frames", type=int, default=72,
+                     help="Frame count when --auto-frames is not set (ignored with --auto-frames)")
+    ap.add_argument("--auto-frames", action="store_true",
+                     help="Detect frame count from the animation (Lottie totalFrames or one loop cycle)")
     ap.add_argument("--width", type=int, default=1920)
     ap.add_argument("--height", type=int, default=1080)
     ap.add_argument("--selector", default="body",
@@ -323,7 +378,7 @@ def main():
     if args.uv_pass:
         uv_pattern = args.uv_out or args.out.replace("####", "uv.####")
 
-    rasterize(args.input, args.out, args.fps, args.duration,
+    rasterize(args.input, args.out, args.fps, args.frames, args.auto_frames,
               args.width, args.height, args.selector, uv_pattern)
 
 
