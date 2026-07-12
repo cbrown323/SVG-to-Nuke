@@ -166,8 +166,8 @@ class _ImportAnimatedSvgPanel(QtWidgets.QDialog):
 
     def _on_auto_toggled(self, checked):
         # Auto: cannot enter a frame amount. For Lottie JSON, also lock FPS to
-        # the file's native rate so Nuke project fps (24) cannot shrink 180@30
-        # into 144 (= 6s * 24).
+        # the file's native rate so Nuke project fps (e.g. 24) cannot shrink
+        # 180@30 into 144 (= 6s * 24).
         self.frames_edit.setEnabled(not checked)
         if self._lottie_meta:
             self.fps_edit.setEnabled(not checked)
@@ -413,7 +413,7 @@ def import_animated_svg():
     out_pattern = os.path.join(out_dir, f"{base}.####.png")
 
     lottie_meta = _read_lottie_metadata(src)
-    panel = _ImportAnimatedSvgPanel(nuke.root().fps() or 30.0, lottie_meta)
+    panel = _ImportAnimatedSvgPanel(30.0, lottie_meta)
     if panel.exec_() != QtWidgets.QDialog.Accepted:
         return
 
