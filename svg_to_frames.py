@@ -13,13 +13,13 @@ Handles three input types automatically, based on file extension:
          frame-accurate scrubbing; otherwise falls back to time-based
          scrubbing via the Web Animations API + SVG SMIL clock.
   .json  Assumed to be a Lottie/Bodymovin export. A temporary host page
-         is generated that loads lottie-web from a CDN and plays it,
-         then frames are scrubbed by exact frame number (not time), and
-         total frame count / native frame rate are read straight off
+         is generated that loads vendored lottie-web (offline) and plays
+         it, then frames are scrubbed by exact frame number (not time),
+         and total frame count / native frame rate are read straight off
          the animation.
 
 Requires:
-    pip install playwright
+    pip install -r requirements.txt
     playwright install chromium
 
 Examples:
@@ -38,7 +38,8 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-LOTTIE_CDN = "https://unpkg.com/lottie-web@5.12.2/build/player/lottie.min.js"
+SCRIPT_DIR = Path(__file__).resolve().parent
+LOTTIE_JS = SCRIPT_DIR / "vendor" / "lottie-web" / "lottie.min.js"
 
 # Embed animation JSON as animationData so we avoid file:// CORS failures and
 # can wait on DOMLoaded before scrubbing.
@@ -48,7 +49,7 @@ LOTTIE_HOST_TEMPLATE = """<!DOCTYPE html>
 #anim{{width:{width}px;height:{height}px;}}</style>
 </head><body>
 <div id="anim"></div>
-<script src="{cdn}"></script>
+<script src="{lottie_src}"></script>
 <script>
   window.lottieAnim = lottie.loadAnimation({{
     container: document.getElementById('anim'),
@@ -300,12 +301,22 @@ def sanitize_lottie_parent_outpoints(animation_data: dict) -> dict:
     return animation_data
 
 
+def _lottie_script_src() -> str:
+    path = LOTTIE_JS.resolve()
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Vendored lottie-web not found at {path}. "
+            "Restore vendor/lottie-web/lottie.min.js from the repo."
+        )
+    return path.as_uri()
+
+
 def make_lottie_host(json_path: Path, width: int, height: int) -> Path:
     animation_data = json.loads(json_path.read_text(encoding="utf-8"))
     if isinstance(animation_data, dict):
         sanitize_lottie_parent_outpoints(animation_data)
     html = LOTTIE_HOST_TEMPLATE.format(
-        cdn=LOTTIE_CDN, width=width, height=height,
+        lottie_src=_lottie_script_src(), width=width, height=height,
         animation_data=json.dumps(animation_data),
     )
     tmp = Path(tempfile.mkstemp(suffix=".html")[1])

@@ -177,8 +177,8 @@ Baseline fix before merge to `main`:
 - [x] Object ID pass (E-7)
 - [x] Async progress panel (E-8)
 - [x] README
-- [ ] Add `requirements.txt`
-- [ ] CLI smoke test with sample `.json` (hybrid Lottie+CSS if available)
+- [x] Add `requirements.txt`
+- [x] CLI smoke test with sample `.json` (`test_assets/sample_bounce.json`)
 
 ---
 

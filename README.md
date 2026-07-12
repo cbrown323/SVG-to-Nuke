@@ -28,17 +28,27 @@ Nuke’s bundled Python cannot run Playwright. The menu command shells out to an
 
 ### 1. Copy the scripts into your `.nuke` folder
 
-Place both files in the same directory:
+Place both Python files and the vendored Lottie player in the same directory:
 
 ```
 ~/.nuke/                          # macOS / Linux
   nuke_svg_import.py
   svg_to_frames.py
+  requirements.txt
+  vendor/
+    lottie-web/
+      lottie.min.js
 
 C:\Users\<you>\.nuke\             # Windows
   nuke_svg_import.py
   svg_to_frames.py
+  requirements.txt
+  vendor\
+    lottie-web\
+      lottie.min.js
 ```
+
+`svg_to_frames.py` resolves `vendor/lottie-web/lottie.min.js` relative to itself — keep that folder beside the script (or run from a full repo clone).
 
 That folder is on Nuke’s default plugin path. If you use a custom `NUKE_PATH`, put both files in a directory listed there instead.
 
@@ -69,8 +79,15 @@ Use any Python 3 environment **outside** Nuke (system Python, venv, or conda). A
 ```bat
 cd C:\Users\AlexStudio\.nuke
 python -m venv svg-raster-venv
-svg-raster-venv\Scripts\python.exe -m pip install playwright
+svg-raster-venv\Scripts\python.exe -m pip install -r requirements.txt
 svg-raster-venv\Scripts\python.exe -m playwright install chromium
+```
+
+If you cloned this repo, copy `requirements.txt` beside the scripts or install from the repo root:
+
+```bash
+pip install -r /path/to/SVG-to-Nuke/requirements.txt
+playwright install chromium
 ```
 
 **Verify the interpreter before touching Nuke** (swap in your actual path):
@@ -150,10 +167,10 @@ Both files should still live on `NUKE_PATH`; only override `SVG_RASTER_SCRIPT` w
 
 #### Quick checklist
 
-1. `pip install playwright` and `playwright install chromium` ran in the **same** `python.exe` you give to Nuke.
+1. `pip install -r requirements.txt` and `playwright install chromium` ran in the **same** `python.exe` you give to Nuke.
 2. `SVG_RASTER_PYTHON` points at that exact file (copy path from Explorer or `where python` on Windows).
 3. Restart Nuke after `setx` or shell-profile changes.
-4. `nuke_svg_import.py` and `svg_to_frames.py` sit in the same `.nuke` folder (step 1).
+4. `nuke_svg_import.py`, `svg_to_frames.py`, and `vendor/lottie-web/` sit in the same `.nuke` folder (step 1).
 
 ### Environment variables
 
@@ -200,6 +217,13 @@ python svg_to_frames.py animation.json \
   --id-pass
 ```
 
+Quick smoke test with the bundled sample Lottie:
+
+```bash
+python svg_to_frames.py test_assets/sample_bounce.json \
+  --out /tmp/sample.####.png --auto-frames --width 256 --height 256
+```
+
 Useful flags:
 
 | Flag | Description |
@@ -232,7 +256,7 @@ Frames are **1-based, 4-digit** (`0001`, `0002`, …).
 ## Limitations
 
 - Output is **raster** at the chosen resolution — not resolution-independent vector.
-- Lottie playback loads lottie-web from a CDN (`unpkg.com`) — requires network on first render.
+- Lottie playback uses **vendored** lottie-web (`vendor/lottie-web/`) — no CDN or network required at render time.
 - UV coordinates follow each shape’s bounding box and may “swim” on heavy path morphing.
 - Non-Lottie animations driven only by `requestAnimationFrame` (no Web Animations API or SMIL) may not scrub reliably.
 
@@ -244,7 +268,10 @@ Frames are **1-based, 4-digit** (`0001`, `0002`, …).
 SVG-to-Nuke/
 ├── nuke_svg_import.py    # Nuke menu, import panel, async rasterize, Read nodes
 ├── svg_to_frames.py      # Playwright rasterizer CLI
-├── test_assets/          # Sample SVG and regression helpers
+├── requirements.txt      # Playwright pin for external Python setup
+├── vendor/
+│   └── lottie-web/       # Offline lottie-web@5.12.2 (no CDN)
+├── test_assets/          # Sample SVG, Lottie JSON, regression helpers
 ├── README.md
 ├── PROJECT_STATE.md      # Internal project status / backlog
 └── DEV_LOG.md            # Development history

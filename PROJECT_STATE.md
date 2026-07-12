@@ -15,7 +15,7 @@ Supports three input formats:
 | Extension | Type | Rasterization strategy |
 |-----------|------|------------------------|
 | `.svg` | Animated SVG (SMIL / CSS / JS) | Load in Chromium; scrub via Web Animations API (`currentTime`) |
-| `.json` | Lottie / Bodymovin | Temp HTML host + lottie-web CDN; frame-accurate `goToAndStop` |
+| `.json` | Lottie / Bodymovin | Temp HTML host + vendored lottie-web; frame-accurate `goToAndStop` |
 | `.html` | Custom host page | Same as SVG unless page exposes `window.lottieAnim` |
 
 ### Design decision
@@ -197,8 +197,8 @@ Additionally, the UV repaint now preserves pixel coverage for **any** input (fix
 | **E-8** | UX | Async rasterize + progress panel (Nuke stays interactive) | **Done** |
 | E-2 | UX | Hide/disable frame/FPS panel fields when Lottie detected | Open |
 | E-3 | UX | Expose `--selector` in Nuke panel for cropped captures | Open |
-| E-4 | Repo | `requirements.txt`, sample test assets | Open |
-| E-5 | Lottie | Offline / vendored lottie-web (no unpkg CDN) | Open |
+| E-4 | Repo | `requirements.txt`, sample test assets | **Done** |
+| E-5 | Lottie | Offline / vendored lottie-web (no unpkg CDN) | **Done** |
 | E-6 | Platform | Cross-platform `SVG_RASTER_PYTHON` defaults / docs | Open |
 
 ---
@@ -210,7 +210,7 @@ Additionally, the UV repaint now preserves pixel coverage for **any** input (fix
 | **P0** | F-1/F-2/F-3 | Sync | Animation sync fix — pause all layers, re-sync before each screenshot | **Done (2026-07-12)** |
 | P1 | F-4 | UV | Validate sync fix resolves tail/heart misalignment on emoji sticker asset | Open — needs user re-test in Nuke |
 | P1 | F-5 | UV | Stroke coverage + expanded selector (`line`, `text`, `tspan`, `use`) in UV pass | **Done (2026-07-12)** — verified pixel-exact alpha on test asset |
-| P2 | E-4 | Repo | `requirements.txt`, sample assets | Open |
+| P2 | E-4 | Repo | `requirements.txt`, sample assets | **Done** |
 | P3 | E-2 | UX | Panel improvements for Lottie vs non-Lottie | Open |
 
 ---
@@ -221,7 +221,7 @@ Additionally, the UV repaint now preserves pixel coverage for **any** input (fix
 |-----------|------------|
 | Nuke side | `nuke` module (ships with Nuke) |
 | Raster side | `playwright`, Chromium browser binary |
-| Lottie `.json` | Network access to `unpkg.com` for lottie-web@5.12.2 |
+| Lottie `.json` | Vendored lottie-web@5.12.2 (`vendor/lottie-web/lottie.min.js`) — offline |
 
 ---
 
@@ -251,7 +251,7 @@ Additionally, the UV repaint now preserves pixel coverage for **any** input (fix
 
 1. ~~Apply **F-1 sync fix** to `svg_to_frames.py`~~ — **done 2026-07-12**, merged from `main` + F-5 UV coverage fix.
 2. Re-render emoji sticker asset with UV pass; confirm timing/scale match in Nuke STMap comp (F-4).
-3. ~~Add README~~ — done; add `requirements.txt` if needed.
+3. ~~Add README + `requirements.txt`~~ — done.
 
 **Artifacts:**
 
