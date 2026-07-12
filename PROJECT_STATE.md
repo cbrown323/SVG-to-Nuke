@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-07-12  
 **Repo:** https://github.com/cbrown323/SVG-to-Nuke  
-**Status:** Ingested, documented, no code changes yet. Fix/enhancement work deferred to foreman workflow.
+**Status:** Documented with full Claude chat context. Repo baseline is **pre-sync-fix** code. Foreman workflow next.
 
 ---
 
@@ -18,13 +18,24 @@ Supports three input formats:
 | `.json` | Lottie / Bodymovin | Temp HTML host + lottie-web CDN; frame-accurate `goToAndStop` |
 | `.html` | Custom host page | Same as SVG unless page exposes `window.lottieAnim` |
 
+### Design decision (Claude session origin)
+
+User requirement: **JS-driven / Lottie-style** animated graphics in Nuke.
+
+| Approach | Verdict |
+|----------|---------|
+| **Option 1:** Custom NDK C++ Reader | Rejected for now — high effort; JS/CSS animation needs headless browser anyway |
+| **Option 2:** Python pre-rasterize + Nuke Read node | **Chosen** — Playwright/Chromium frame-by-frame export, wrapped in Nuke menu command |
+
+Fidelity is bounded by headless Chromium. True vector resolution-independence is **not** available — output is raster at chosen `--width`/`--height`.
+
 ---
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Nuke (built-in Python, no Playwright)                          │
+│  Nuke 14.x (built-in Python, no Playwright)                     │
 │                                                                 │
 │  File → Import Animated SVG...                                  │
 │       │                                                         │
@@ -72,24 +83,38 @@ Frame numbers are **1-based, 4-digit zero-padded** (`0001`, `0002`, …).
 
 ---
 
-## Installation (current)
+## Installation
 
-1. Place both `.py` files in the same directory on `NUKE_PATH` (e.g. `~/.nuke`).
-2. In `~/.nuke/menu.py`:
+### Files
+
+1. Place both `.py` files in the same directory on `NUKE_PATH` (e.g. `C:\Users\CBWorkflow\.nuke` or `~/.nuke`).
+2. In `~/.nuke/menu.py` — **both lines at column 0, no indent:**
 
    ```python
    import nuke_svg_import
    nuke_svg_import.install()
    ```
 
-3. Configure external Python with Playwright:
+   Common mistake: copying indented lines from the docstring → `IndentationError: unexpected indent`.
 
-   ```bash
-   pip install playwright
-   playwright install chromium
-   ```
+3. Do **not** hardcode Windows paths inside `os.path.join()` with unescaped backslashes — use `SVG_RASTER_SCRIPT` env var or rely on the default `os.path.join(os.path.dirname(__file__), "svg_to_frames.py")`. A path like `"C:\Users\..."` causes `SyntaxError: unicodeescape`.
 
-4. Point Nuke at that interpreter via `SVG_RASTER_PYTHON` (recommended) or edit `EXTERNAL_PYTHON` in `nuke_svg_import.py`.
+### External Python
+
+Nuke's bundled interpreter does not have Playwright:
+
+```bash
+pip install playwright
+playwright install chromium
+```
+
+Set before launching Nuke:
+
+```bat
+set SVG_RASTER_PYTHON=C:\path\to\python.exe
+```
+
+Or edit `EXTERNAL_PYTHON` in `nuke_svg_import.py`.
 
 ### Environment variables
 
@@ -97,6 +122,12 @@ Frame numbers are **1-based, 4-digit zero-padded** (`0001`, `0002`, …).
 |----------|---------|---------|
 | `SVG_RASTER_PYTHON` | Windows Store Python path (see code) | Interpreter that runs `svg_to_frames.py` |
 | `SVG_RASTER_SCRIPT` | `svg_to_frames.py` beside `nuke_svg_import.py` | Override raster script path |
+
+### Verified environment (user)
+
+- **OS:** Windows
+- **Nuke:** 14.0v5
+- **NUKE_PATH:** `C:\Users\CBWorkflow\.nuke`
 
 ---
 
@@ -111,6 +142,82 @@ When **UV Pass** is enabled:
 
 In Nuke: feed the UV Read into an **STMap** node's `uv` input for per-shape retexturing.
 
+### What UV pass gives you
+
+- Per-shape local 0–1 UV tile (fabric/fur/pattern per body part).
+- UVs ride along with SVG transforms (rotation, scale, translation).
+
+### What UV pass does NOT give you
+
+- One continuous UV atlas across the whole character.
+- Topological tracking on heavy path morphing / squash-stretch (UV follows bounding box per frame → can "swim").
+- A single texture wrapping continuously across all shapes (texture repeats per shape).
+
+---
+
+## Confirmed bugs (user testing)
+
+Test asset: **emoji sticker** Lottie with floating hearts — main body Lottie-driven, decorative hearts are separate **CSS/Web Animations** layers.
+
+| Symptom | User observation |
+|---------|------------------|
+| **F-1 Timing drift** | UV pass frame N does not match color pass frame N |
+| **F-2 Scale/alpha mismatch** | Tail (and other elements) different size in color alpha vs UV alpha |
+| **F-3 Comp misalignment** | STMap comp shows UV and color out of sync on timing and scale |
+
+### Root cause (diagnosed in Claude session)
+
+For **Lottie** files, the rasterizer:
+
+1. Scrubs only `window.lottieAnim.goToAndStop(i)` per frame.
+2. Does **not** pause or scrub secondary CSS/Web Animations layers.
+3. During UV capture (inject shader → screenshot → clear), real time passes and CSS layers (hearts) keep animating.
+4. Color screenshot locks Lottie to frame `i`; UV screenshot fires milliseconds later with CSS layers advanced → **same frame number, different pose**.
+
+**Repo baseline still has this bug.** Claude session produced a fix (+80/−56 lines) that is **not yet merged into this repo**.
+
+### Intended fix (from Claude session — not in repo yet)
+
+1. **Pause all animation layers up front** (Lottie + CSS/Web Animations).
+2. **Before every screenshot** (color AND UV):
+   - Re-assert Lottie frame: `goToAndStop(i, true)`
+   - Re-assert CSS timeline: `document.getAnimations().forEach(a => a.currentTime = t_ms)`
+3. Ensures color and UV captures are atomically synchronized even when UV injection adds delay.
+
+---
+
+## Enhancement requests
+
+| ID | Area | Description | Status |
+|----|------|-------------|--------|
+| **E-1** | AOV | **Normal pass** output (user asked: "Would it be possible to also output a normal pass?") | Open — design TBD |
+| E-2 | UX | Hide/disable duration/FPS panel fields when Lottie detected | Open |
+| E-3 | UX | Expose `--selector` in Nuke panel for cropped captures | Open |
+| E-4 | Repo | `requirements.txt`, README, sample test assets | Open |
+| E-5 | Lottie | Offline / vendored lottie-web (no unpkg CDN) | Open |
+| E-6 | Platform | Cross-platform `SVG_RASTER_PYTHON` defaults / docs | Open |
+
+### Normal pass (E-1) — initial notes for foreman
+
+Not implemented. Possible approaches to evaluate:
+
+- Derive from SVG path geometry + transform stack per shape (2.5D facing-camera normals).
+- Simpler fallback: flat Z+ normal (solid blue) per shape for relighting experiments.
+- May share the same per-screenshot sync infrastructure as the UV pass fix.
+
+---
+
+## Fix backlog (prioritized for foreman)
+
+| Priority | ID | Area | Description | Status |
+|----------|-----|------|-------------|--------|
+| **P0** | F-1/F-2/F-3 | Sync | Apply Claude's animation sync fix — pause all layers, re-sync before each screenshot | **Fix exists in Claude chat, not in repo** |
+| P1 | F-4 | UV | Validate sync fix resolves tail/heart misalignment on emoji sticker asset | Open (after F-1) |
+| P1 | F-5 | UV | Expand shape selector (`text`, `g`, `use`, etc.) if elements still missing | Open |
+| P2 | E-1 | AOV | Normal pass output + Nuke Read node wiring | Open |
+| P2 | E-4 | Repo | `requirements.txt`, install docs, sample assets | Open |
+| P3 | E-2 | UX | Panel improvements for Lottie vs non-Lottie | Open |
+
 ---
 
 ## Dependencies
@@ -123,76 +230,41 @@ In Nuke: feed the UV Read into an **STMap** node's `uv` input for per-shape rete
 
 ---
 
-## Known limitations (code review, pre-fix)
+## Known limitations (remaining after sync fix)
 
-These are observations from static review — not yet validated in a full Nuke/Playwright test environment on this agent.
+### Animation coverage
 
-### Platform / environment
-
-- **Windows-centric default** for `EXTERNAL_PYTHON`; Linux/macOS users must set `SVG_RASTER_PYTHON`.
-- **Two-Python architecture** is intentional (Nuke's embedded Python lacks Playwright).
-
-### Lottie / network
-
-- `.json` imports require **internet** to load lottie-web from CDN.
-- **Fixed 300 ms** post-load wait may be insufficient for large Lottie files or slow networks.
-- No explicit wait for `lottieAnim` `DOMLoaded` / `data_ready` before reading `totalFrames`.
-
-### Animation coverage (non-Lottie)
-
-- Time-based scrubbing uses **Web Animations API** only (`document.getAnimations()`).
-- Animations driven purely by `requestAnimationFrame`, some SMIL edge cases, or custom timers may not scrub correctly.
-- Duration/FPS panel fields are **ignored for Lottie** but still shown (can confuse users).
+- Non-Lottie scrubbing uses Web Animations API only — `requestAnimationFrame`-only animations may not scrub.
+- Duration/FPS ignored for Lottie (panel still shows them).
 
 ### UV pass
 
-- UV applies to a fixed set of SVG shape tags; **groups, text, `<use>`**, and non-standard elements may be missed.
-- UV is computed **per-shape bounding box**, not per-vertex — fine for STMap retexturing of flat shapes, not for arbitrary UV unwrapping.
-- Strokes are zeroed during UV capture (`stroke: none`).
+- Per-shape bounding-box UVs, not atlas UVs.
+- Strokes zeroed during UV capture.
 
-### Operational / UX
+### Operational
 
-- **`_debug_first_load.png`** written on every run (clutter in output folder).
-- **`--selector`** exists in CLI but is **not exposed** from the Nuke panel (always full viewport / `body`).
-- Subprocess errors surface **stderr only**; stdout from successful runs goes to Script Editor via `nuke.tprint`.
-- No `requirements.txt` or pinned Playwright version in repo yet.
-- No automated tests.
+- `_debug_first_load.png` written every run.
+- No automated tests in repo.
 
 ---
 
-## Fix backlog
+## Foreman workflow handoff
 
-> **Source gap:** Prior discussion lived in [Claude web chat](https://claude.ai/share/58a60fd6-343a-458d-bb26-46514c5c6ca9). That share URL was **not readable** from the cloud agent environment (SPA/auth). Specific fix list from that session should be pasted into the next foreman chat or added here before implementation.
+**Start here:**
 
-Placeholder priorities (to be confirmed against Claude chat + user testing):
+1. Apply **F-1 sync fix** to `svg_to_frames.py` (see Claude session diff description in `DEV_LOG.md`).
+2. Re-render emoji sticker asset with UV pass; confirm timing/scale match in Nuke STMap comp.
+3. Design and implement **E-1 normal pass** if sync fix validates.
+4. Add `requirements.txt` + README.
 
-| ID | Area | Description | Status |
-|----|------|-------------|--------|
-| F-? | TBD | Fixes identified in Claude web session — **needs import** | Open |
-| — | Platform | Cross-platform `SVG_RASTER_PYTHON` discovery / docs | Open |
-| — | Lottie | Robust load detection (event-based, not fixed timeout) | Open |
-| — | Lottie | Offline / vendored lottie-web | Open |
-| — | SVG | Broader animation scrubbing beyond Web Animations API | Open |
-| — | UV | Cover more SVG element types; validate STMap workflow E2E | Open |
-| — | UX | Hide or disable duration/FPS for Lottie in Nuke panel | Open |
-| — | UX | Optional debug screenshot; expose selector in panel | Open |
-| — | Repo | `requirements.txt`, README install guide, sample assets | Open |
+**Artifacts:**
 
----
+- `PROJECT_STATE.md` (this file)
+- `DEV_LOG.md` (full session history including Claude origin)
+- `nuke_svg_import.py`, `svg_to_frames.py` (baseline — **missing sync fix**)
 
-## Foreman workflow (next session)
-
-User plans a **new chat** with foreman workflow to:
-
-1. Import confirmed fix list from Claude session (if not already in backlog).
-2. Implement fixes with minimal, focused diffs.
-3. Add verification steps (CLI raster smoke test; Nuke integration where available).
-
-**Handoff artifacts for foreman:**
-
-- This file (`PROJECT_STATE.md`)
-- `DEV_LOG.md` (session history)
-- Unmodified source: `nuke_svg_import.py`, `svg_to_frames.py`
+**Claude chat reference:** https://claude.ai/share/58a60fd6-343a-458d-bb26-46514c5c6ca9
 
 ---
 
@@ -201,7 +273,7 @@ User plans a **new chat** with foreman workflow to:
 ```
 SVG-to-Nuke/
 ├── nuke_svg_import.py    # Nuke menu + subprocess + Read nodes
-├── svg_to_frames.py      # Playwright rasterizer CLI
+├── svg_to_frames.py      # Playwright rasterizer CLI (pre-sync-fix baseline)
 ├── PROJECT_STATE.md      # This file
 ├── DEV_LOG.md            # Development log
 └── README.md             # Repo title (minimal)
