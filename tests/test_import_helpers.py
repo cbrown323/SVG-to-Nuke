@@ -146,7 +146,7 @@ def _load_nuke_module():
         },
     ):
         spec = importlib.util.spec_from_file_location(
-            "nuke_svg_import", ROOT / "nuke_svg_import.py"
+            "nuke_svg_import", ROOT / "svg_to_nuke" / "nuke_svg_import.py"
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)

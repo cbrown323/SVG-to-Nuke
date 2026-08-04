@@ -10,17 +10,18 @@ modeless progress panel shows per-pass frame counts while files are written.
 
 INSTALL
 -------
-1. Put this file and svg_to_frames.py in the same folder, and add that
-   folder to your NUKE_PATH (e.g. ~/.nuke).
-2. In ~/.nuke/menu.py add:
+1. Copy the svg_to_nuke/ package folder into ~/.nuke/ (see install/README.md
+   in the repo). The folder must contain nuke_svg_import.py, svg_to_frames.py,
+   and vendor/lottie-web/ side by side.
+2. In ~/.nuke/menu.py add (column 0, no indent):
 
-       import nuke_svg_import
+       import svg_to_nuke.nuke_svg_import as nuke_svg_import
        nuke_svg_import.install()
 
 3. Nuke's built-in Python interpreter does NOT have Playwright, so point
    EXTERNAL_PYTHON at a separate Python environment where you've run:
 
-       pip install playwright
+       pip install -r requirements.txt
        playwright install chromium
 
    Either edit EXTERNAL_PYTHON below, or set the SVG_RASTER_PYTHON

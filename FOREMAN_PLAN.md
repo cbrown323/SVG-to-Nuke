@@ -51,7 +51,7 @@ Secondary track (same sprint, lower priority):
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  nuke_svg_import.py                                                     │
+│  svg_to_nuke/nuke_svg_import.py                                         │
 │    T-3  import_folder() + output_dir picker                             │
 │    T-3  --out passed to subprocess (replace hardcoded out_dir)          │
 │    T-5  reimport_selected_read() — menu on Read nodes                   │
@@ -60,7 +60,7 @@ Secondary track (same sprint, lower priority):
                                 │ QProcess
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  svg_to_frames.py                                                       │
+│  svg_to_nuke/svg_to_frames.py                                           │
 │    T-4  write render.log in out_dir (settings, timing, Lottie meta)     │
 │    T-6  rAF time-override hook in sync_to_frame path                    │
 │    T-8  foreignObject detection + warning or alternate capture          │
@@ -172,8 +172,8 @@ Skip hidden files, `_*`, and optionally skip if `{basename}_frames/` already exi
 
 | File | Change |
 |------|--------|
-| `nuke_svg_import.py` | Panel field, `import_animated_svg()`, new `batch_import_animated_svg()` |
-| `nuke_svg_import.py` | `install()` — second menu entry |
+| `svg_to_nuke/nuke_svg_import.py` | Panel field, `import_animated_svg()`, new `batch_import_animated_svg()` |
+| `svg_to_nuke/nuke_svg_import.py` | `install()` — second menu entry |
 
 ### Dependencies
 
@@ -229,7 +229,7 @@ warnings: ["selector 'body' used full viewport"]
 
 | File | Change |
 |------|--------|
-| `svg_to_frames.py` | `_RenderLog` helper, integrate in `rasterize()` |
+| `svg_to_nuke/svg_to_frames.py` | `_RenderLog` helper, integrate in `rasterize()` |
 
 ### Dependencies
 
@@ -273,7 +273,7 @@ Use `nuke.Text_Knob` / `nuke.String_Knob` with `setFlag(nuke.INVISIBLE)` or a de
 
 | File | Change |
 |------|--------|
-| `nuke_svg_import.py` | Metadata knobs, `reimport_selected_read()`, menu hook |
+| `svg_to_nuke/nuke_svg_import.py` | Metadata knobs, `reimport_selected_read()`, menu hook |
 
 ### Dependencies
 
@@ -315,7 +315,7 @@ Use `nuke.Text_Knob` / `nuke.String_Knob` with `setFlag(nuke.INVISIBLE)` or a de
 
 | File | Change |
 |------|--------|
-| `svg_to_frames.py` | Detection, init script, `sync_to_frame` branch |
+| `svg_to_nuke/svg_to_frames.py` | Detection, init script, `sync_to_frame` branch |
 | `test_assets/` | Optional rAF test SVG |
 
 ### Dependencies

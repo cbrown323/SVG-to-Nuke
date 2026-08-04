@@ -199,6 +199,34 @@ Baseline fix before merge to `main`:
 
 ---
 
+## 2026-07-12 — Session: Plugin package restructure
+
+### Changes
+
+- Moved `nuke_svg_import.py`, `svg_to_frames.py`, and `vendor/` into **`svg_to_nuke/`** package.
+- Added `install/menu.py.example` and `install/README.md` (`.nuke` layout + migration from loose files).
+- Updated README, `PROJECT_STATE.md`, `FOREMAN_PLAN.md`, and test paths.
+
+### `.nuke` install layout
+
+```
+~/.nuke/
+  menu.py
+  svg_to_nuke/
+    nuke_svg_import.py
+    svg_to_frames.py
+    vendor/lottie-web/
+```
+
+`menu.py` import is now `import svg_to_nuke.nuke_svg_import as nuke_svg_import`.
+
+### Testing
+
+- `tests/run_smoke.py` — PASS
+- `tests/test_import_helpers.py` — PASS
+
+---
+
 ## Template for future entries
 
 ```markdown

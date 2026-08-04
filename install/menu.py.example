@@ -1,0 +1,5 @@
+# Copy these lines into ~/.nuke/menu.py (column 0, no indent).
+# Requires the svg_to_nuke/ folder to live directly under ~/.nuke/
+
+import svg_to_nuke.nuke_svg_import as nuke_svg_import
+nuke_svg_import.install()

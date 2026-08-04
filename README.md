@@ -26,35 +26,34 @@ Nuke’s bundled Python cannot run Playwright. The menu command shells out to an
 
 ## Installation
 
-### 1. Copy the scripts into your `.nuke` folder
+### 1. Install the plugin package in `.nuke`
 
-Place both Python files and the vendored Lottie player in the same directory:
+Copy the **`svg_to_nuke/`** folder into your Nuke user directory. Do not scatter loose `.py` files in `.nuke` root — keep the package intact so internal paths stay connected.
 
 ```
 ~/.nuke/                          # macOS / Linux
-  nuke_svg_import.py
-  svg_to_frames.py
-  requirements.txt
-  vendor/
-    lottie-web/
-      lottie.min.js
+  menu.py
+  svg_to_nuke/
+    __init__.py
+    nuke_svg_import.py
+    svg_to_frames.py
+    vendor/
+      lottie-web/
+        lottie.min.js
 
 C:\Users\<you>\.nuke\             # Windows
-  nuke_svg_import.py
-  svg_to_frames.py
-  requirements.txt
-  vendor\
-    lottie-web\
-      lottie.min.js
+  menu.py
+  svg_to_nuke\
+    ...
 ```
 
-`svg_to_frames.py` resolves `vendor/lottie-web/lottie.min.js` relative to itself — keep that folder beside the script (or run from a full repo clone).
+`svg_to_frames.py` resolves `vendor/lottie-web/lottie.min.js` relative to itself inside `svg_to_nuke/`. Nuke adds `~/.nuke` to Python’s path by default, so no extra `NUKE_PATH` entry is needed for the import below.
 
-That folder is on Nuke’s default plugin path. If you use a custom `NUKE_PATH`, put both files in a directory listed there instead.
+From a repo clone, copy only `svg_to_nuke/` (or symlink it). See **`install/README.md`** for migration steps if you previously had loose files in `.nuke`.
 
 ### 2. Register the menu command in `menu.py`
 
-Create or edit `menu.py` in the same `.nuke` directory:
+Create or edit `menu.py` in your `.nuke` directory:
 
 **macOS / Linux:** `~/.nuke/menu.py`  
 **Windows:** `C:\Users\<you>\.nuke\menu.py`
@@ -62,7 +61,7 @@ Create or edit `menu.py` in the same `.nuke` directory:
 Add these lines at **column 0** (no leading indent):
 
 ```python
-import nuke_svg_import
+import svg_to_nuke.nuke_svg_import as nuke_svg_import
 nuke_svg_import.install()
 ```
 
@@ -72,21 +71,21 @@ Restart Nuke. You should see **File → Import Animated SVG...**.
 
 ### 3. Install Playwright in an external Python
 
-Use any Python 3 environment **outside** Nuke (system Python, venv, or conda). A dedicated venv next to your Nuke scripts is usually the least painful option on Windows.
+Use any Python 3 environment **outside** Nuke (system Python, venv, or conda). A dedicated venv next to `svg_to_nuke/` is usually the least painful option on Windows.
 
-**Create and install (example — adjust the folder name):**
+**Create and install (example — adjust paths):**
 
 ```bat
 cd C:\Users\AlexStudio\.nuke
 python -m venv svg-raster-venv
-svg-raster-venv\Scripts\python.exe -m pip install -r requirements.txt
+svg-raster-venv\Scripts\python.exe -m pip install -r C:\path\to\SVG-to-Nuke\requirements.txt
 svg-raster-venv\Scripts\python.exe -m playwright install chromium
 ```
 
-If you cloned this repo, copy `requirements.txt` beside the scripts or install from the repo root:
+From a repo clone:
 
 ```bash
-pip install -r /path/to/SVG-to-Nuke/requirements.txt
+pip install -r requirements.txt
 playwright install chromium
 ```
 
@@ -116,7 +115,7 @@ export SVG_RASTER_PYTHON="/Users/alex/.nuke/svg-raster-venv/bin/python3"
 
 Close and reopen Nuke after setting the variable. Shortcuts launched from the desktop will not see a variable you only set in an already-open terminal unless you used `setx` (Windows) or logged out/in.
 
-**Option B — edit `EXTERNAL_PYTHON` in `nuke_svg_import.py`**
+**Option B — edit `EXTERNAL_PYTHON` in `svg_to_nuke/nuke_svg_import.py`**
 
 Use a **raw string** (`r"..."`) or forward slashes. Backslashes alone will break Python:
 
@@ -160,17 +159,17 @@ os.path.join(os.path.dirname(__file__), "svg_to_frames.py")
 If you keep the scripts in separate folders, set the script path explicitly — do **not** paste a Windows path with bare backslashes into `os.path.join()`:
 
 ```bat
-setx SVG_RASTER_SCRIPT "C:\Users\AlexStudio\.nuke\svg_to_frames.py"
+setx SVG_RASTER_SCRIPT "C:\Users\AlexStudio\.nuke\svg_to_nuke\svg_to_frames.py"
 ```
 
-Both files should still live on `NUKE_PATH`; only override `SVG_RASTER_SCRIPT` when the auto-detect path is wrong.
+Only override `SVG_RASTER_SCRIPT` when auto-detect is wrong. By default both scripts resolve relative to each other inside `svg_to_nuke/`.
 
 #### Quick checklist
 
 1. `pip install -r requirements.txt` and `playwright install chromium` ran in the **same** `python.exe` you give to Nuke.
 2. `SVG_RASTER_PYTHON` points at that exact file (copy path from Explorer or `where python` on Windows).
 3. Restart Nuke after `setx` or shell-profile changes.
-4. `nuke_svg_import.py`, `svg_to_frames.py`, and `vendor/lottie-web/` sit in the same `.nuke` folder (step 1).
+4. `svg_to_nuke/` lives under `.nuke` with `nuke_svg_import.py`, `svg_to_frames.py`, and `vendor/lottie-web/` intact.
 
 ### Environment variables
 
@@ -209,7 +208,7 @@ Each rendered fill and stroke gets a distinct saturated RGB. Use **Keyer**, **ID
 You can also run the rasterizer directly:
 
 ```bash
-python svg_to_frames.py animation.json \
+python svg_to_nuke/svg_to_frames.py animation.json \
   --out renders/anim.####.png \
   --auto-frames \
   --width 1920 --height 1080 \
@@ -220,7 +219,7 @@ python svg_to_frames.py animation.json \
 Quick smoke test with the bundled sample Lottie:
 
 ```bash
-python svg_to_frames.py test_assets/sample_bounce.json \
+python svg_to_nuke/svg_to_frames.py test_assets/sample_bounce.json \
   --out /tmp/sample.####.png --auto-frames --width 256 --height 256
 ```
 
@@ -285,15 +284,18 @@ Frames are **1-based, 4-digit** (`0001`, `0002`, …).
 
 ```
 SVG-to-Nuke/
-├── nuke_svg_import.py    # Nuke menu, import panel, async rasterize, Read nodes
-├── svg_to_frames.py      # Playwright rasterizer CLI
-├── requirements.txt      # Playwright pin for external Python setup
-├── vendor/
-│   └── lottie-web/       # Offline lottie-web@5.12.2 (no CDN)
-├── test_assets/          # Sample SVG, Lottie JSON, regression helpers
+├── svg_to_nuke/              # Nuke plugin package — copy this folder to ~/.nuke/
+│   ├── nuke_svg_import.py    # Menu, import panel, async rasterize, Read nodes
+│   ├── svg_to_frames.py      # Playwright rasterizer CLI
+│   └── vendor/lottie-web/    # Offline lottie-web
+├── install/                  # menu.py.example + install / migration notes
+├── tests/                    # Smoke test + unit tests
+├── test_assets/              # Sample SVG, Lottie JSON, regression helpers
+├── requirements.txt
 ├── README.md
-├── PROJECT_STATE.md      # Internal project status / backlog
-└── DEV_LOG.md            # Development history
+├── PROJECT_STATE.md
+├── FOREMAN_PLAN.md
+└── DEV_LOG.md
 ```
 
 ---
@@ -306,7 +308,7 @@ SVG-to-Nuke/
 | `Couldn't find the external Python interpreter` | Set `SVG_RASTER_PYTHON` to the full path of a real `python.exe` (see step 3 examples) |
 | `ModuleNotFoundError: playwright` | Run `pip install playwright` in **that same** `python.exe`, then verify with `-c "import playwright"` |
 | Chromium errors | Run `playwright install chromium` in that Python |
-| `SyntaxError: unicodeescape` in `nuke_svg_import.py` | Use `r"..."` or forward slashes for Windows paths — see step 3 |
+| `SyntaxError: unicodeescape` in `svg_to_nuke/nuke_svg_import.py` | Use `r"..."` or forward slashes for Windows paths — see step 3 |
 | Windows Store `python.exe` does nothing | Use a venv or python.org install path instead of `WindowsApps\python.exe` |
 | UV / color out of sync | Re-render with the current `svg_to_frames.py` (old PNGs won’t match) |
 

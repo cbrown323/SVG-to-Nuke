@@ -62,8 +62,8 @@ Fidelity is bounded by headless Chromium. True vector resolution-independence is
 
 | File | Runtime | Role |
 |------|---------|------|
-| `nuke_svg_import.py` | Inside Nuke | Menu hook, UI panel, subprocess orchestration, Read node creation |
-| `svg_to_frames.py` | External Python 3 | Browser-based rasterization CLI |
+| `nuke_svg_import.py` | Inside Nuke | Menu hook, UI panel, subprocess orchestration, Read node creation (`svg_to_nuke/`) |
+| `svg_to_frames.py` | External Python 3 | Browser-based rasterization CLI (`svg_to_nuke/`) |
 
 ### Output layout
 
@@ -87,17 +87,19 @@ Frame numbers are **1-based, 4-digit zero-padded** (`0001`, `0002`, …).
 
 ### Files
 
-1. Place both `.py` files in the same directory on `NUKE_PATH` (e.g. `C:\Users\CBWorkflow\.nuke` or `~/.nuke`).
+1. Copy the **`svg_to_nuke/`** package folder into `NUKE_PATH` (e.g. `~/.nuke/svg_to_nuke/`).
 2. In `~/.nuke/menu.py` — **both lines at column 0, no indent:**
 
    ```python
-   import nuke_svg_import
+   import svg_to_nuke.nuke_svg_import as nuke_svg_import
    nuke_svg_import.install()
    ```
 
    Common mistake: copying indented lines from the docstring → `IndentationError: unexpected indent`.
 
-3. Do **not** hardcode Windows paths inside `os.path.join()` with unescaped backslashes — use `SVG_RASTER_SCRIPT` env var or rely on the default `os.path.join(os.path.dirname(__file__), "svg_to_frames.py")`. A path like `"C:\Users\..."` causes `SyntaxError: unicodeescape`.
+3. Do **not** hardcode Windows paths inside `os.path.join()` with unescaped backslashes — use `SVG_RASTER_SCRIPT` env var or rely on the default `os.path.join(os.path.dirname(__file__), "svg_to_frames.py")` inside `svg_to_nuke/`. A path like `"C:\Users\..."` causes `SyntaxError: unicodeescape`.
+
+See **`install/README.md`** for migration from loose files in `.nuke` root.
 
 ### External Python
 
@@ -121,7 +123,7 @@ Or edit `EXTERNAL_PYTHON` in `nuke_svg_import.py`.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `SVG_RASTER_PYTHON` | Windows Store Python path (see code) | Interpreter that runs `svg_to_frames.py` |
-| `SVG_RASTER_SCRIPT` | `svg_to_frames.py` beside `nuke_svg_import.py` | Override raster script path |
+| `SVG_RASTER_SCRIPT` | `svg_to_nuke/svg_to_frames.py` beside `nuke_svg_import.py` | Override raster script path |
 
 ### Verified environment (user)
 
@@ -268,7 +270,7 @@ Additionally, the UV repaint now preserves pixel coverage for **any** input (fix
 - `FOREMAN_PLAN.md` (implementation plan — **read first**)
 - `PROJECT_STATE.md` (this file)
 - `DEV_LOG.md` (development history)
-- `nuke_svg_import.py`, `svg_to_frames.py` (sync fix + UV/ID AOV passes)
+- `svg_to_nuke/nuke_svg_import.py`, `svg_to_nuke/svg_to_frames.py` (sync fix + UV/ID AOV passes)
 - `test_assets/rocket_test.svg` + `test_assets/check_alpha.py` (alpha-parity regression helper; to be wrapped by T-1 smoke test)
 
 ---
@@ -277,9 +279,13 @@ Additionally, the UV repaint now preserves pixel coverage for **any** input (fix
 
 ```
 SVG-to-Nuke/
-├── nuke_svg_import.py    # Nuke menu + subprocess + Read nodes
-├── svg_to_frames.py      # Playwright rasterizer CLI (F-1 sync + UV/ID AOV passes)
-├── PROJECT_STATE.md      # This file
-├── DEV_LOG.md            # Development log
-└── README.md             # Install and usage guide
+├── svg_to_nuke/
+│   ├── nuke_svg_import.py    # Nuke menu + subprocess + Read nodes
+│   └── svg_to_frames.py      # Playwright rasterizer CLI (F-1 sync + UV/ID AOV passes)
+├── install/                  # menu.py.example, migration notes
+├── tests/
+├── test_assets/
+├── PROJECT_STATE.md          # This file
+├── DEV_LOG.md                # Development log
+└── README.md                 # Install and usage guide
 ```

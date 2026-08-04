@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SCRIPT = ROOT / "svg_to_frames.py"
+SCRIPT = ROOT / "svg_to_nuke" / "svg_to_frames.py"
 SAMPLE_LOTTIE = ROOT / "test_assets" / "sample_bounce.json"
 ROCKET_SVG = ROOT / "test_assets" / "rocket_test.svg"
 
